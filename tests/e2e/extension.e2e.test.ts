@@ -238,9 +238,13 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       expect(job.result?.filename, site).toMatch(/^lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
       expect(job.result?.verification.checks.some((c) => c.code === 'download.renamed')).toBe(false);
       expect(newestDownload('md', job.startedAt)).toMatch(/lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
-      // The panel reports the result itself.
+      // The panel reports the result itself (UI language follows the browser: Korean or English;
+      // headless Chrome on Linux ignores --lang for chrome.i18n).
       await page.waitForFunction(
-        () => document.querySelector('[data-lucian-panel]')?.shadowRoot?.querySelector('.status .title')?.textContent?.includes('인수인계 파일을 저장했습니다'),
+        () => {
+          const box = document.querySelector('[data-lucian-panel]')?.shadowRoot?.querySelector('.status');
+          return box?.getAttribute('data-level') === 'ok' && /인수인계 파일을 저장했습니다|Handoff file saved/.test(box.querySelector('.title')?.textContent ?? '');
+        },
         { timeout: 10_000 },
       );
       if (site === 'chatgpt') {
