@@ -233,5 +233,12 @@ export function replacementPairs(text: string): Array<{ old: string[]; neu: stri
 }
 
 /** Error output in code/tool blocks (stack traces, compiler errors), not the word "error" in code. */
+/**
+ * A sentence that needs the one before it to be understood: Korean demonstratives and connectives
+ * ("이 방식은…", "그래서…", "따라서…") and their English counterparts ("This…", "So…").
+ */
+export const ANAPHOR_RE =
+  /^(?:[-*>]\s*)?(?:(?:이|그|저)(?=\s|것|거|게|건|걸|렇|런|러|래|리|때|곳|쪽|분|중|와|후|전|를|는|가|에|로|의)|해당|위의?\s|아래의?\s|앞의?\s|따라서|그러므로|그러면|하지만|또한|즉[,\s]|결국|(?:this|that|these|those|it|its|they|them|such|thus|therefore|hence|however|also|then|so|above|below)\b|as (?:mentioned|noted|shown)\b)/i;
+
 export const CODE_ERROR_RE =
   /(Traceback \(most recent call last\)|^\s*[\w.]*(Error|Exception)(:|\s+at\b)|\berror\[E\d+\]|^\s*error(\[\w+\])?:|\bFAILED\b|panicked at|Uncaught \w*Error|Unhandled (promise )?rejection|npm ERR!|fatal:)/m;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handoffBudget, runHandoff } from '../../src/handoff/engine';
+import { ANAPHOR_RE } from '../../src/handoff/patterns';
 import { verifyHandoffMarkdown } from '../../src/handoff/render';
 import { conv as makeConv, englishScenario, koreanScenario, msg, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
 import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
@@ -255,6 +256,35 @@ describe('handoff — very long messages (real-data shape, 2026-10)', () => {
     const middle = [...excerpts.matchAll(/항목 (\d+):/g)].map((m) => Number(m[1]));
     expect(middle.some((k) => k > 150 && k < 450)).toBe(true);
     expect(estimateTokens(md)).toBeLessThanOrEqual(handoffBudget(r.stats.sourceTokens) * 1.05);
+  });
+});
+
+describe('handoff — referential repair (2026-10)', () => {
+  it('detects sentences that depend on the previous one', () => {
+    for (const t of ['그래서 캐시를 Redis로 옮겼습니다.', '이 방식은 메모리를 줄입니다.', '따라서 롤백이 필요합니다.', 'This means the cache is stale.', 'So we moved it.'])
+      expect(ANAPHOR_RE.test(t), t).toBe(true);
+    for (const t of ['이미 배포했습니다.', '이번 주에 끝냅니다.', 'Redis를 씁니다.', 'Thisbe is a name.'])
+      expect(ANAPHOR_RE.test(t), t).toBe(false);
+  });
+
+  it('keeps the sentence before an excerpt that opens with a reference', () => {
+    // A long answer whose paragraphs read "X 쪽은 …상황이었습니다. 그래서 handlerN()…": the second
+    // sentence carries the facts, the first one says what "그래서" refers to.
+    const nouns = ['캐시', '배포', '권한', '색인', '알림', '결제', '로그', '이미지', '세션', '쿼터', '백업', '토큰', '웹훅', '큐', '스키마', '리전', '샤드', '버킷', '정책', '감사'];
+    const para = (k: number) =>
+      `${nouns[k % 20]} 쪽은 예전 방식 그대로 두면 안 되는 상황이었습니다. 그래서 handler${k}()의 기준값은 cfg_${k}=${(k * 37) % 997}ms이고 대상은 ${nouns[(k * 7 + 3) % 20]}${k * 11}입니다.`;
+    const c = makeConv([msg('user', '변경 내역을 정리해 주세요.'), msg('assistant', Array.from({ length: 500 }, (_, k) => para(k)).join('\n\n')), msg('user', '좋아요.'), msg('assistant', '네.')]);
+    const lines = runHandoff(c, { now: 0 }).markdown.split('\n');
+    let kept = 0;
+    let dangling = 0;
+    lines.forEach((l, n) => {
+      if (!/그래서 handler\d+\(\)/.test(l)) return;
+      kept++;
+      // The transcript keeps whole paragraphs (both sentences on one line); excerpts are one per line.
+      if (!/쪽은 예전 방식/.test(l) && !/쪽은 예전 방식/.test(lines[n - 1] ?? '')) dangling++;
+    });
+    expect(kept).toBeGreaterThan(30);
+    expect(dangling / kept).toBeLessThan(0.1);
   });
 });
 

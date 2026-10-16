@@ -4,6 +4,8 @@
 import { conceptsOf, greedyCoverage, type CoverItem } from '../../src/handoff/coverage';
 import { runHandoff, V11_LAYOUT, type Layout } from '../../src/handoff/engine';
 import { estimateTokens } from '../../src/shared/util';
+import { centroid, cliff, facility, hybrid, hybridRepair, klsum, lsa, submodular, sumbasic, surprisal, withRepair } from './classic';
+import { embFacility, embHybrid, embMMR, external, semDedupeCoverage } from './embedding';
 import { reduced } from './lossless';
 import { fillBudget, renderUnits, type Idf, type Prepared } from './prepare';
 
@@ -251,6 +253,8 @@ export const ALGORITHMS: Record<string, Algorithm> = {
   lucian,
   'lucian/v1.1': lucianV11,
   'lucian/v1.1+coverage': lucianV11Coverage,
+  // the default engine without referential repair (layout.repair = false)
+  'lucian/norepair': engine('coverage', { repair: false }),
   // the default layout with relevance ranking instead of coverage
   'lucian/relevance': engine('relevance', {}),
   // smaller transcript (15%, ≤2000 / ≤1000 tokens per message)
@@ -262,6 +266,22 @@ export const ALGORITHMS: Record<string, Algorithm> = {
   // code back at 25%
   'lucian/code25': engine('coverage', { codeShare: 0.25, codeMin: 1500 }),
   'coverage+compact': compacted(coverage),
+  klsum,
+  sumbasic,
+  centroid,
+  lsa,
+  facility,
+  submodular,
+  surprisal,
+  cliff,
+  'coverage+repair': withRepair((p, idf, b) => coverageSelect(p, idf, b)),
+  'coverage+facility': hybrid,
+  'coverage+facility+repair': hybridRepair,
+  'emb:facility': embFacility,
+  'emb:mmr': embMMR,
+  'emb:hybrid': embHybrid,
+  'emb:dedupe+coverage': semDedupeCoverage,
+  'ext:llmlingua2': external('llmlingua2'),
   'dedupe+recent': onReduced(recent),
   'dedupe+mmr': onReduced(mmr),
   'dedupe+coverage': onReduced(coverage),

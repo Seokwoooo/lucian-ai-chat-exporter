@@ -4,6 +4,8 @@
 
 import { extractPaths, topicTokens } from '../../src/handoff/patterns';
 import { estimateTokens, urlKey } from '../../src/shared/util';
+import { ANAPHOR } from './classic';
+import { normalizeForHash } from '../../src/handoff/segment';
 import type { Idf, Prepared } from './prepare';
 
 export interface Gold {
@@ -12,6 +14,11 @@ export interface Gold {
   recentTerms: Map<string, number>;
   entities: Set<string>;
   probes: string[][];
+  /** Normalized unit text → unit index, for mapping output lines back to the source. */
+  unitByText: Map<string, number>;
+  /** Normalized text of the unit before each unit in the same message ('' when none). */
+  prevText: string[];
+  anaphoric: boolean[];
 }
 
 export interface Scores {
@@ -27,6 +34,9 @@ export interface Scores {
   recent: number;
   /** Share of duplicated lines in the output (lower is better). */
   redundancy: number;
+  /** Share of kept sentences that open with a reference ("이 방식은…", "This…") whose preceding
+   * sentence was dropped (lower is better). */
+  dangling: number;
   tokens: number;
   /** 0.3 fact + 0.25 key terms + 0.2 user + 0.15 entities + 0.1 recent. */
   composite: number;
@@ -85,7 +95,20 @@ export function buildGold(p: Prepared, idf: Idf): Gold {
     if (u.m >= N - 4) recentTerms.push(...p.terms[i]);
     if (u.kind !== 'code') for (const e of entitiesOf(u.text)) entities.add(e);
   });
+  const norm = (t: string) => normalizeForHash(t, false);
+  const unitByText = new Map<string, number>();
+  const prevText: string[] = [];
+  const anaphoric: boolean[] = [];
+  p.units.forEach((u, i) => {
+    if (u.kind !== 'code') unitByText.set(norm(u.text), i);
+    const prev = i > 0 && p.units[i - 1].m === u.m ? p.units[i - 1] : null;
+    prevText.push(prev && prev.kind !== 'code' ? norm(prev.text) : '');
+    anaphoric.push(u.kind !== 'code' && ANAPHOR.test(u.text));
+  });
   return {
+    unitByText,
+    prevText,
+    anaphoric,
     keyTerms: new Map(key),
     userTerms: weighted(new Set(userTerms), idf),
     recentTerms: weighted(new Set(recentTerms), idf),
@@ -134,7 +157,24 @@ export function score(output: string, gold: Gold): Scores {
   for (const e of gold.entities) if (outEntities.has(e)) entHit++;
   const longLines = lines.filter((l) => l.length >= 20);
   const redundancy = longLines.length ? 1 - new Set(longLines).size / longLines.length : 0;
+  // Dangling references: kept anaphoric sentences whose previous sentence is not in the output.
+  const outNorm = new Set(
+    output
+      .split('\n')
+      .map((l) => normalizeForHash(l.replace(/\s*\[#m\d+\]\s*/g, ' ').replace(/^\s*[-*]\s+/, ''), false))
+      .filter(Boolean),
+  );
+  const outFull = normalizeForHash(output, false);
+  let ana = 0;
+  let dang = 0;
+  for (const t of outNorm) {
+    const i = gold.unitByText.get(t);
+    if (i == null || !gold.anaphoric[i] || !gold.prevText[i]) continue;
+    ana++;
+    if (!outFull.includes(gold.prevText[i].slice(0, 60))) dang++;
+  }
   const s = {
+    dangling: ana ? dang / ana : 0,
     fact: gold.probes.length ? factHit / gold.probes.length : 1,
     keyTerms: recall(gold.keyTerms, present),
     user: recall(gold.userTerms, present),

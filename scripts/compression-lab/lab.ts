@@ -4,6 +4,7 @@
 import type { Conversation } from '../../src/shared/types';
 import { handoffBudget } from '../../src/handoff/engine';
 import { ALGORITHMS } from './algorithms';
+import { labContext } from './ext';
 import { losslessStats, type LosslessStats } from './lossless';
 import { buildGold, score, type Scores } from './metrics';
 import { corpusIdf, prepare } from './prepare';
@@ -54,10 +55,13 @@ export async function runLab(convs: Conversation[], opts: LabOptions = {}): Prom
       // Every algorithm gets the same budget. The engine has fixed parts (guide, latest messages)
       // and can exceed very small budgets; the tokens column shows what each one really used.
       const budget = target;
+      labContext.ci = ci;
+      labContext.ratio = ratio;
       for (const name of names) {
         const t0 = clock();
         const out = ALGORITHMS[name](p, budget, idf);
         const ms = clock() - t0;
+        if (!out && name.startsWith('ext:')) continue; // external compressor not run for this level
         rows.push({ conv: ci, sourceTokens: p.sourceTokens, messages: p.conv.messages.length, ratio, budget, algo: name, ms, scores: score(out, gold) });
         opts.keepOutputs?.(`${ci}:${ratio}:${name}`, out);
         await new Promise((r) => setTimeout(r, 0));
@@ -89,6 +93,7 @@ export function summarize(rows: LabRow[], ratios: number[], conversations: numbe
         entities: avg((s) => s.entities),
         recent: avg((s) => s.recent),
         redundancy: avg((s) => s.redundancy),
+        dangling: avg((s) => s.dangling),
         tokens: avg((s) => s.tokens),
         composite: avg((s) => s.composite),
         ms: list.reduce((s, r) => s + r.ms, 0) / list.length,
@@ -105,11 +110,11 @@ export function formatSummary(s: LabSummary): string {
   const out: string[] = [`conversations: ${s.conversations}`];
   for (const ratio of s.ratios) {
     out.push(ratio === 0 ? '\n== default handoff budget (12% of source, 8k–32k) ==' : `\n== budget ≈ ${ratio * 100}% of source ==`);
-    out.push('algorithm          composite  fact  terms  user  ents  recent  dup   tokens   ms   wins');
+    out.push('algorithm             composite  fact  terms  user  ents  recent  dup  dangl   tokens   ms   wins');
     const entries = Object.entries(s.means[String(ratio)] ?? {}).sort((a, b) => b[1].composite - a[1].composite);
     for (const [name, m] of entries) {
       out.push(
-        `${name.padEnd(18)} ${pct(m.composite)}    ${pct(m.fact)} ${pct(m.keyTerms)} ${pct(m.user)} ${pct(m.entities)} ${pct(m.recent)}  ${pct(m.redundancy)} ${String(Math.round(m.tokens)).padStart(7)} ${String(Math.round(m.ms)).padStart(5)} ${String(m.wins).padStart(5)}`,
+        `${name.padEnd(21)} ${pct(m.composite)}    ${pct(m.fact)} ${pct(m.keyTerms)} ${pct(m.user)} ${pct(m.entities)} ${pct(m.recent)}  ${pct(m.redundancy)} ${pct(m.dangling)} ${String(Math.round(m.tokens)).padStart(7)} ${String(Math.round(m.ms)).padStart(5)} ${String(m.wins).padStart(5)}`,
       );
     }
   }

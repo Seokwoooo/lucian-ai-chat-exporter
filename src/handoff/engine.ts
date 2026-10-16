@@ -10,7 +10,7 @@ import { cleanUrl, estimateTokens, hangulRatio, hostLabel, urlKey } from '../sha
 import { messageBodyMarkdown, replaceOutsideCode } from '../export/markdown';
 import { clusterNearDuplicates, minhash } from './minhash';
 import { conceptsOf, greedyCoverage, type CoverItem } from './coverage';
-import { CODE_ERROR_RE, F, bulletText, classify, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, replacementPairs, stripTracking, topicTokens } from './patterns';
+import { ANAPHOR_RE, CODE_ERROR_RE, F, bulletText, classify, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, replacementPairs, stripTracking, topicTokens } from './patterns';
 import { segmentMessage, type Unit } from './segment';
 import { renderHandoff, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
 
@@ -64,6 +64,8 @@ export interface Layout {
   listScale: number;
   /** Units cut out of clipped transcript messages may be selected as context excerpts. */
   clippedExcerpts: boolean;
+  /** Excerpts that open with a reference ("이 방식은…") get the sentence before them. */
+  repair: boolean;
 }
 
 /**
@@ -79,10 +81,11 @@ export const DEFAULT_LAYOUT: Layout = {
   codeMin: 600,
   listScale: 1,
   clippedExcerpts: true,
+  repair: true,
 };
 
 /** v1.1 layout, kept for comparison in the compression lab. */
-export const V11_LAYOUT: Layout = { ...DEFAULT_LAYOUT, lastMsgCap: 6000, recentMsgCap: 4000, codeShare: 0.25, codeMin: 1500, clippedExcerpts: false };
+export const V11_LAYOUT: Layout = { ...DEFAULT_LAYOUT, lastMsgCap: 6000, recentMsgCap: 4000, codeShare: 0.25, codeMin: 1500, clippedExcerpts: false, repair: false };
 
 /** Earlier-context selection used by default (chosen with the compression lab, docs/compression-lab.md). */
 export const DEFAULT_SELECTION: 'relevance' | 'coverage' = 'coverage';
@@ -896,9 +899,14 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       if (!ctx.layout.clippedExcerpts) continue;
       // Units cut out of a clipped message compete for the context budget like earlier units, so
       // the middle of a very long message is not simply lost.
+      // Units appear in order, so each one is searched after the previous match: a sentence
+      // repeated in the visible head does not make its copy in the cut-out middle "visible".
+      let cursor = 0;
       for (const i of unitsOf(m)) {
         const probe = units[i].text.split('\n')[0].slice(0, 60).trim();
-        if (probe && !body.includes(probe)) hiddenInRecent.add(i);
+        const at = probe ? body.indexOf(probe, cursor) : -1;
+        if (at < 0) hiddenInRecent.add(i);
+        else cursor = at + probe.length;
       }
     }
   }
@@ -936,6 +944,35 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   if (!full) {
     const used0 = fixedTokens + code.reduce((s, c) => s + estimateTokens(c.text), 0) + recent.reduce((s, r) => s + estimateTokens(r.body), 0);
     let remaining = budget - used0 - 1500 + ctx.pastExtra;
+    const pastItem = (k: number): PastItem => ({ text: units[k].kind === 'table' ? units[k].text : bulletText(units[k].text), m: units[k].m, u: k, role: units[k].role, table: units[k].kind === 'table' });
+    // Referential completeness: an excerpt that opens with "이 방식은…", "그래서…" or "This…" is
+    // hard to read without the sentence before it ("referential dangling"; in the compression lab
+    // about half of such excerpts had lost it). Such a unit is selected together with its
+    // antecedent (up to two steps back in the same message) as one item with their joint cost.
+    const chainOf = (i: number): number[] => {
+      const chain = [i];
+      if (!ctx.layout.repair) return chain;
+      let j = i;
+      for (let step = 0; step < 2 && ANAPHOR_RE.test(units[j].text); step++) {
+        const prev = j - 1;
+        const p = units[prev];
+        if (!p || p.m !== units[j].m || !isProse(p) || p.kind === 'heading') break;
+        // Already in the document as this exact sentence, or visible in the transcript.
+        if (used.has(prev) || usedKeys.has(p.key) || (p.m >= recentFrom && !hiddenInRecent.has(prev))) break;
+        chain.unshift(prev);
+        j = prev;
+      }
+      return chain;
+    };
+    const chainCost = (ch: number[]) => ch.reduce((s2, k) => s2 + (used.has(k) ? 0 : estimateTokens(units[k].text) + 8), 0);
+    const takeChain = (ch: number[]) => {
+      for (const k of ch) {
+        if (used.has(k)) continue;
+        take(k);
+        remaining -= estimateTokens(units[k].text) + 8;
+        past.push(pastItem(k));
+      }
+    };
     // "Current focus" = what the latest requests, open tasks, next steps and decisions talk about.
     // Older text that shares those topics is relevant past context even without strong signals.
     const focus = new Set<string>();
@@ -990,17 +1027,17 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       for (const i of used) for (const c of conceptsOf(topics(i))) covered.add(c);
       for (let m = recentFrom; m < N; m++) for (const i of unitsOf(m)) if (isProse(units[i]) && !hiddenInRecent.has(i)) for (const c of conceptsOf(topics(i))) covered.add(c);
       const maxRel = Math.max(1, ...cand.map((i) => rel.get(i)!));
-      const items: CoverItem[] = cand.map((i) => ({
-        id: i,
-        concepts: conceptsOf(topics(i)),
-        cost: estimateTokens(units[i].text) + 8,
-        prior: 0.5 + 0.5 * (rel.get(i)! / maxRel),
-      }));
-      for (const i of greedyCoverage(items, weight, Math.max(0, remaining), covered)) {
-        take(i);
-        remaining -= estimateTokens(units[i].text) + 8;
-        past.push({ text: units[i].kind === 'table' ? units[i].text : bulletText(units[i].text), m: units[i].m, u: i, role: units[i].role, table: units[i].kind === 'table' });
-      }
+      const chains = new Map(cand.map((i) => [i, chainOf(i)]));
+      const items: CoverItem[] = cand.map((i) => {
+        const ch = chains.get(i)!;
+        return {
+          id: i,
+          concepts: ch.length === 1 ? conceptsOf(topics(i)) : [...new Set(ch.flatMap((k) => conceptsOf(topics(k))))],
+          cost: chainCost(ch),
+          prior: 0.5 + 0.5 * (rel.get(i)! / maxRel),
+        };
+      });
+      for (const i of greedyCoverage(items, weight, Math.max(0, remaining), covered)) takeChain(chains.get(i)!);
       // Once every concept is covered, the rest of the budget goes to the most relevant units left.
       let w = 0;
       for (const i of cand) if (!isUsed(i)) cand[w++] = i;
@@ -1016,12 +1053,10 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
         for (const t of tt) if ((covered.get(t) ?? 0) >= 2) seen++;
         if (seen / tt.length > 0.7) continue;
       }
-      const tok = estimateTokens(units[i].text) + 8;
-      if (tok > remaining) continue;
-      remaining -= tok;
-      take(i);
+      const ch = chainOf(i);
+      if (chainCost(ch) > remaining) continue;
+      takeChain(ch);
       for (const t of tt) covered.set(t, (covered.get(t) ?? 0) + 1);
-      past.push({ text: units[i].kind === 'table' ? units[i].text : bulletText(units[i].text), m: units[i].m, u: i, role: units[i].role, table: units[i].kind === 'table' });
     }
     past.sort((x, y) => x.u - y.u);
   }
