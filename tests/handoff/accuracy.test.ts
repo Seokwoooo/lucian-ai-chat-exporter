@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runHandoff } from '../../src/handoff/engine';
+import { verifyHandoffMarkdown } from '../../src/handoff/render';
 import { englishScenario, koreanScenario, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
 import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
 import { CHATGPT_ID, chatgptConversation } from '../fixtures/sites';
@@ -215,6 +216,17 @@ describe('handoff noise control — web-search research chat (user report, 2026-
     // Advice ("~확인해야 합니다") and descriptions of other projects are not the user's tasks.
     expect(section(md, '미완료 작업')).not.toMatch(/동기화 제한도 확인해야 합니다/);
     expect(section(md, '완료한 작업')).not.toMatch(/테마 12개를 자체 제작해 작성했습니다/);
+  });
+});
+
+describe('handoff structure check (verification report)', () => {
+  it('accepts every scenario in both languages and modes, and rejects a broken document', () => {
+    for (const c of [koreanScenario(), englishScenario(), unrelatedChangeScenario(), researchScenario()]) {
+      const r = runHandoff(c, { now: Date.UTC(2026, 9, 16) });
+      expect(verifyHandoffMarkdown(r.markdown, r.lang), `${c.title} (${r.stats.mode}, ${r.lang})`).toEqual({ ok: true });
+    }
+    const md = runHandoff(researchScenario()).markdown;
+    expect(verifyHandoffMarkdown(md.replace(/^## \d+\. 현재 진행 상황.*$/m, ''), 'ko').ok).toBe(false);
   });
 });
 

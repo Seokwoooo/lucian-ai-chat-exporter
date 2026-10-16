@@ -470,3 +470,21 @@ export function renderHandoff(doc: HandoffDoc): string {
   out.push(`_${S.footer}_`);
   return `${out.join('\n')}\n`;
 }
+
+/**
+ * Structure check for the verification report: the sections every handoff has (others are left
+ * out when empty), in order, plus at least one message reference.
+ */
+export function verifyHandoffMarkdown(md: string, lang: 'ko' | 'en'): { ok: boolean; detail?: string } {
+  const S = L[lang];
+  const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let rest = md;
+  for (const title of [S.meta, S.goal, S.current, S.next]) {
+    const m = new RegExp(`^## \\d+\\. ${esc(title)}`, 'm').exec(rest);
+    if (!m) return { ok: false, detail: `missing section: ${title}` };
+    rest = rest.slice(m.index + m[0].length);
+  }
+  if (!new RegExp(`^## \\d+\\. (${esc(S.transcript)}|${esc(S.recent)})`, 'm').test(rest)) return { ok: false, detail: `missing section: ${S.transcript}` };
+  if (!/\[#m\d+\]/.test(md)) return { ok: false, detail: 'missing message references' };
+  return { ok: true };
+}

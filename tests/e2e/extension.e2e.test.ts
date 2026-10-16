@@ -237,6 +237,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       expect(job.phase, `${site}: ${JSON.stringify(job.error)}`).toBe('done');
       expect(job.result?.filename, site).toMatch(/^lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
       expect(job.result?.verification.checks.some((c) => c.code === 'download.renamed')).toBe(false);
+      expect(job.result?.verification.level, `${site}: ${JSON.stringify(job.result?.verification.checks)}`).toBe('ok');
       expect(newestDownload('md', job.startedAt)).toMatch(/lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
       // The panel reports the result itself (UI language follows the browser: Korean or English;
       // headless Chrome on Linux ignores --lang for chrome.i18n).
@@ -278,6 +279,8 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       expect(handoff).toMatch(/## (0\. 기본 정보|0\. Source)/);
       expect(handoff).toMatch(/\[#m1\]/);
       expect(h.job.result?.verification.checks.some((c) => c.code === 'download.ok' && c.status === 'pass')).toBe(true);
+      expect(h.job.result?.verification.checks.filter((c) => c.status === 'fail'), `${site}/handoff failed checks`).toEqual([]);
+      expect(h.job.result?.verification.checks.find((c) => c.code === 'output.ok')?.status).toBe('pass');
       writeFileSync(join(OUT, `${site}-handoff.md`), handoff);
       report.push({ site, kind: 'handoff', ms: h.ms, timings: h.job.timings, level: h.job.result?.verification.level });
       if (site === 'chatgpt') {

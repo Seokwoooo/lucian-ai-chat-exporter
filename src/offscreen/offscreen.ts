@@ -7,8 +7,9 @@ import type { BuildRequest, BuildResponse } from '../shared/messages';
 import type { Conversation, HandoffStats, JobTimings, VerificationCheck } from '../shared/types';
 import { formatDate } from '../shared/util';
 import { describeImage, EMBEDDABLE, type ImageStore, type StoredImage } from '../export/images';
-import { buildVerification, levelOf, verifyTextOutput } from '../export/verify';
+import { buildVerification, levelOf } from '../export/verify';
 import type { WorkerMessage } from '../handoff/worker';
+import { verifyHandoffMarkdown } from '../handoff/render';
 
 const urls = new Set<string>();
 
@@ -78,8 +79,9 @@ function runWorker(req: BuildRequest): Promise<Extract<WorkerMessage, { type: 'd
 async function buildHandoff(req: BuildRequest, conv: Conversation): Promise<BuildResponse> {
   const r = await runWorker(req);
   const bytes = new TextEncoder().encode(r.markdown);
-  const headers = r.lang === 'ko' ? ['## 0. 기본 정보', '## 1. 핵심 목표', '## 2. 확정된 주요 결정', '## 5. 현재 진행 상황', '## 부록'] : ['## 0. Source', '## 1. Core goal', '## 2. Confirmed decisions', '## 5. Current state', '## Appendix'];
-  const output = verifyTextOutput(bytes, headers);
+  // Sections are numbered in order and empty ones are left out, so the renderer checks its own
+  // structure (and the bytes must decode back to the same text).
+  const output = new TextDecoder('utf-8', { fatal: true }).decode(bytes) === r.markdown ? verifyHandoffMarkdown(r.markdown, r.lang) : { ok: false, detail: 'utf-8' };
   const verification = buildVerification(conv, 'handoff', { output, formatLabel: 'Markdown' });
   const extra: VerificationCheck[] = [];
   extra.push(
