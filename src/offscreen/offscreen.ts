@@ -195,7 +195,7 @@ async function buildExport(req: BuildRequest, conv: Conversation, t0: number): P
     renderMath,
     parseXml: (s) => parser.parseFromString(s, 'application/xml'),
     parseHtml: (s) => parser.parseFromString(s, 'text/html'),
-    appVersion: chrome.runtime.getManifest().version,
+    appVersion: req.appVersion,
   });
   return {
     ok: true,

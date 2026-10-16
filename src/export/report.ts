@@ -8,7 +8,9 @@ const ICON: Record<VerificationCheck['status'], string> = { pass: '✓', warn: '
 
 export function checkText(locale: Locale, c: VerificationCheck): string {
   const params = { ...(c.params ?? {}) };
-  for (const [k, v] of Object.entries(params)) if ((k === 'size' || k === 'saved' || k === 'expected') && typeof v === 'number') params[k] = formatBytes(v);
+  // Only size parameters are byte counts; "saved" is a plain count in attachments.saved.
+  const byteKeys = c.code === 'download.mismatch' ? ['saved', 'expected'] : ['size'];
+  for (const [k, v] of Object.entries(params)) if (byteKeys.includes(k) && typeof v === 'number') params[k] = formatBytes(v);
   return t(locale, `check.${c.code}` as MessageKey, params);
 }
 

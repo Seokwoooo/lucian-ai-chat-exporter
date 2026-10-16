@@ -146,3 +146,27 @@ describe('format specifics', () => {
     expect(data.conversation.otherBranchMessages.length).toBe(1);
   });
 });
+
+describe('long tool output', () => {
+  it('is shortened in documents with a visible note, but kept whole in JSON', async () => {
+    const long = Array.from({ length: 400 }, (_, i) => `line ${i} of a fetched page`).join('\n');
+    const withTool = (format: 'md' | 'docx' | 'json'): PipelineInput => {
+      const base = input(format);
+      const conv = base.conv;
+      conv.messages[1].contents.push({ type: 'tool', title: 'WebFetch · result', content: long });
+      return base;
+    };
+    const md = await runExport(withTool('md'));
+    const text = strFromU8(md.bytes);
+    expect(text).toContain('line 10 of a fetched page');
+    expect(text).not.toContain('line 399 of a fetched page');
+    expect(text).toMatch(/[\d,]+자 생략 — 전체 내용은 JSON·ZIP 백업에 있습니다/);
+    expect(md.verification.checks.map((c) => `${c.status}:${c.code}`)).toContain('info:tools.clipped');
+    const docx = await runExport(withTool('docx'));
+    const xml = strFromU8(unzipSync(docx.bytes)['word/document.xml']);
+    expect(xml).not.toContain('line 399 of a fetched page');
+    const json = await runExport(withTool('json'));
+    expect(strFromU8(json.bytes)).toContain('line 399 of a fetched page');
+    expect(json.verification.checks.some((c) => c.code === 'tools.clipped')).toBe(false);
+  });
+});

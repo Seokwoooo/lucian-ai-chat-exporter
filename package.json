@@ -15,7 +15,8 @@
     "test:e2e": "node scripts/build.mjs && vitest run --config vitest.e2e.config.ts",
     "bench": "node scripts/bench.mjs",
     "package": "node scripts/build.mjs && node scripts/package.mjs",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "e2e:install-chrome": "npx @puppeteer/browsers install chrome@stable --path ~/.cache/lucian-cft"
   },
   "engines": {
     "node": ">=20"

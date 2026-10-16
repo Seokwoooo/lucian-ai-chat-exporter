@@ -127,6 +127,10 @@ function classifyNode(node: ChatGPTNode): NodeClass {
     return { visible: false, reason: `tool-call:${recipient}` };
   }
   if (role === 'tool') {
+    // Newer models run code through "container.exec"; ChatGPT shows those runs only inside the
+    // collapsed activity panel (checked on chatgpt.com, 2026-10), so they are reported as skipped
+    // like their tool calls. Legacy Code Interpreter ("python") output stays visible.
+    if (ct === 'execution_output' && msg.author?.name && msg.author.name !== 'python') return { visible: false, reason: `tool:${msg.author.name}` };
     if (ct === 'execution_output') return { visible: true };
     if (ct === 'multimodal_text' && hasImageParts(msg)) return { visible: true };
     return { visible: false, reason: `tool:${msg.author?.name ?? ct}` };
@@ -269,6 +273,14 @@ export function convertNode(node: ChatGPTNode): { contents: ExportContent[]; raw
     } catch {
       if (raw.trim()) out.push({ type: 'tool', title: recipient, content: raw });
     }
+    return { contents: out, rawHadContent };
+  }
+
+  // GPT-5 style "preamble" messages on the commentary channel are shown only inside the collapsed
+  // thinking panel, so they are kept as thinking (JSON/ZIP) rather than as answer text.
+  if (role === 'assistant' && ct === 'text' && (msg.channel === 'commentary' || meta.is_thinking_preamble_message)) {
+    const { text } = applyContentReferences(joined, meta.content_references);
+    if (text.trim()) out.push({ type: 'thinking', title: 'commentary', content: text });
     return { contents: out, rawHadContent };
   }
 
@@ -553,7 +565,11 @@ export const chatgptAdapter: SiteAdapter = {
   },
 
   countDomUserTurns() {
-    const n = document.querySelectorAll('[data-message-author-role="user"]').length;
+    // Lower bound only: the conversation view is virtualized and unmounts off-screen turns.
+    const n = Math.max(
+      document.querySelectorAll('[data-message-author-role="user"]').length,
+      document.querySelectorAll('[data-user-message-bubble]').length,
+    );
     return n > 0 ? n : undefined;
   },
 

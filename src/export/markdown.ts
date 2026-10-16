@@ -88,7 +88,7 @@ export function contentToMarkdown(c: ExportContent, opts: MdOptions): string {
       return `${title}${f}${c.language ?? ''}\n${code.replace(/\n$/, '')}\n${f}`;
     }
     case 'tool': {
-      const code = c.content ?? '';
+      const code = toolDocText(c.content ?? '', L);
       const f = codeFence(code);
       return `**${t(L, 'doc.tool')} · ${c.title ?? ''}**\n\n${f}${c.language ?? ''}\n${code.replace(/\n$/, '')}\n${f}`;
     }
@@ -135,6 +135,16 @@ export function contentToMarkdown(c: ExportContent, opts: MdOptions): string {
     }
   }
   return '';
+}
+
+/** Tool output longer than this is shortened in documents; the JSON/ZIP backups keep it whole. */
+export const TOOL_DOC_LIMIT = 2_000;
+
+export function toolDocText(content: string, locale: Locale): string {
+  if (content.length <= TOOL_DOC_LIMIT) return content;
+  const nl = content.lastIndexOf('\n', TOOL_DOC_LIMIT);
+  const end = nl > TOOL_DOC_LIMIT * 0.6 ? nl : TOOL_DOC_LIMIT;
+  return `${content.slice(0, end).replace(/\s+$/, '')}\n… ${t(locale, 'doc.toolClipped', { n: (content.length - end).toLocaleString('en-US') })}`;
 }
 
 export function messageBodyMarkdown(msg: ExportMessage, opts: MdOptions): string {

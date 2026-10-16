@@ -1,6 +1,7 @@
 // DOM fallback used only when a service API path fails. Selectors live in one table per site so
 // a site redesign only requires editing this map. Lazy-rendered history is loaded by scrolling
-// the chat container to the top until the message count stops growing.
+// the chat container to the top until the message count stops growing; virtualized lists (which
+// unmount turns that leave the viewport) are then read while scrolling back down.
 
 import { SITES } from '../shared/sites';
 import type { Conversation, ExportMessage, Role, SiteId } from '../shared/types';
@@ -12,18 +13,38 @@ interface DomSpec {
   items: string;
   role: (el: Element) => Role;
   content: (el: Element, role: Role) => Element;
+  /** Stable id that survives re-rendering (needed for virtualized lists). */
+  key?: (el: Element) => string | null;
 }
 
 export const DOM_SPECS: Record<SiteId, DomSpec> = {
   chatgpt: {
-    items: '[data-message-author-role]',
-    role: (el) => (el.getAttribute('data-message-author-role') === 'user' ? 'user' : 'assistant'),
-    content: (el) => el.querySelector('.markdown') ?? el.querySelector('.whitespace-pre-wrap') ?? el,
+    // Older layout: [data-message-author-role]. Layout seen on chatgpt.com in 2026-10: one
+    // [data-chatgpt-search-unit-key] block per message, user bubbles marked
+    // [data-user-message-bubble], assistant blocks labelled by an sr-only heading.
+    items: '[data-message-author-role], [data-chatgpt-search-unit-key]',
+    role: (el) => {
+      const r = el.getAttribute('data-message-author-role');
+      if (r) return r === 'user' ? 'user' : 'assistant';
+      return el.querySelector('[data-user-message-bubble]') ? 'user' : 'assistant';
+    },
+    content: (el, role) =>
+      el.querySelector('.markdown') ??
+      (role === 'user' ? el.querySelector('[data-user-message-bubble] .whitespace-pre-wrap') ?? el.querySelector('[data-user-message-bubble]') : null) ??
+      (el.hasAttribute('data-message-author-role') ? el.querySelector('.whitespace-pre-wrap') : null) ??
+      el,
+    key: (el) => el.getAttribute('data-chatgpt-search-unit-key') || el.getAttribute('data-message-id'),
   },
   claude: {
-    items: '[data-testid="user-message"], .font-claude-response, .font-claude-message',
+    // claude.ai in 2026-10 renders a virtualized transcript: [data-testid="assistant-message"]
+    // replaced .font-claude-response, and every message sits under a [data-turn-key] row.
+    items: '[data-testid="user-message"], [data-testid="assistant-message"], .font-claude-response, .font-claude-message',
     role: (el) => (el.matches('[data-testid="user-message"]') ? 'user' : 'assistant'),
     content: (el) => el,
+    key: (el) => {
+      const k = el.closest('[data-turn-key]')?.getAttribute('data-turn-key') ?? el.closest('[data-testid="transcript-row"]')?.getAttribute('data-index');
+      return k ? `${el.matches('[data-testid="user-message"]') ? 'u' : 'a'}:${k}` : null;
+    },
   },
   gemini: {
     items: 'user-query, model-response',
@@ -86,16 +107,75 @@ async function loadLazyHistory(spec: DomSpec, ctx: AdapterContext): Promise<void
   scroller.scrollTop = original;
 }
 
+interface DomItem {
+  role: Role;
+  md: string;
+}
+
+/**
+ * Reads every message element once, in document order, keyed by a stable id. Elements without a
+ * site key are keyed by identity, which is stable as long as the list is not virtualized.
+ */
+class DomCollector {
+  readonly order: string[] = [];
+  readonly items = new Map<string, DomItem>();
+  private readonly ids = new WeakMap<Element, string>();
+  private seq = 0;
+
+  constructor(private readonly spec: DomSpec) {}
+
+  scan(): number {
+    const elements = outermost(Array.from(document.querySelectorAll(this.spec.items)));
+    let anchor = -1;
+    for (const el of elements) {
+      let key = this.spec.key?.(el) ?? this.ids.get(el);
+      if (!key) {
+        key = `el-${++this.seq}`;
+        this.ids.set(el, key);
+      }
+      const known = this.items.has(key);
+      if (!known) {
+        const role = this.spec.role(el);
+        this.items.set(key, { role, md: htmlToMarkdown(this.spec.content(el, role)) });
+        this.order.splice(anchor + 1, 0, key);
+        anchor++;
+      } else {
+        anchor = this.order.indexOf(key);
+      }
+    }
+    return elements.length;
+  }
+}
+
+/** Walks a virtualized list from top to bottom so turns that are unmounted get read too. */
+async function scanDownwards(collector: DomCollector, spec: DomSpec): Promise<void> {
+  const scroller = scrollableAncestor(document.querySelector(spec.items));
+  if (!scroller) return;
+  const original = scroller.scrollTop;
+  const deadline = Date.now() + 60_000;
+  scroller.scrollTop = 0;
+  await sleep(300);
+  for (let i = 0; i < 400 && Date.now() < deadline; i++) {
+    collector.scan();
+    if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) break;
+    scroller.scrollTop += Math.max(200, scroller.clientHeight * 0.8);
+    await sleep(250);
+  }
+  collector.scan();
+  scroller.scrollTop = original;
+}
+
 export async function domFallbackExtract(site: SiteId, ctx: AdapterContext, conversationId: string): Promise<Conversation> {
   const spec = DOM_SPECS[site];
   await loadLazyHistory(spec, ctx);
   const t0 = performance.now();
-  const elements = outermost(Array.from(document.querySelectorAll(spec.items)));
+  const collector = new DomCollector(spec);
+  collector.scan();
+  if (spec.key) await scanDownwards(collector, spec);
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
-  elements.forEach((el, i) => {
-    const role = spec.role(el);
-    const md = htmlToMarkdown(spec.content(el, role));
+  collector.order.forEach((key, i) => {
+    const { role, md } = collector.items.get(key)!;
     const id = `dom-${i + 1}`;
     if (!md) {
       missing.push(id);
@@ -115,7 +195,7 @@ export async function domFallbackExtract(site: SiteId, ctx: AdapterContext, conv
     messages,
     extraction: {
       method: 'dom',
-      sourceNodeCount: elements.length,
+      sourceNodeCount: collector.order.length,
       missingNodeIds: missing,
       skipped: [],
       warnings: [],

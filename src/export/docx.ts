@@ -26,7 +26,7 @@ import { t, formatBytes, type Locale } from '../shared/i18n';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 import { EMBEDDABLE, fitSize, type ImageStore } from './images';
-import { messageHeaderText } from './markdown';
+import { messageHeaderText, toolDocText } from './markdown';
 import { lex, type Token, type Tokens } from './md-parse';
 
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -307,7 +307,7 @@ function contentBlocks(c: ExportContent, ctx: Ctx): Block[] {
     case 'code':
       return codeBlock(c.content ?? '', [c.title, c.language].filter(Boolean).join(' · ') || undefined, ctx);
     case 'tool':
-      return [captionParagraph(`${t(L, 'doc.tool')} · ${c.title ?? ''}`), ...codeBlock(c.content ?? '', c.language, ctx)];
+      return [captionParagraph(`${t(L, 'doc.tool')} · ${c.title ?? ''}`), ...codeBlock(toolDocText(c.content ?? '', L), c.language, ctx)];
     case 'artifact':
     case 'html_widget':
       return [captionParagraph(`${t(L, 'doc.artifact')} · ${c.title ?? ''}`), ...codeBlock(c.content ?? '', c.type === 'html_widget' ? 'html' : c.language, ctx)];

@@ -50,6 +50,8 @@ export interface BuildRequest {
   format?: ExportFormat;
   locale: Locale;
   assets: AssetStatus[];
+  /** Offscreen documents only get the messaging part of chrome.runtime, so the SW passes this. */
+  appVersion: string;
 }
 
 export interface BuildResponse {

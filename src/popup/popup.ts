@@ -66,6 +66,7 @@ async function init(): Promise<void> {
   for (const el of document.querySelectorAll<HTMLElement>('[data-i18n]')) el.textContent = t(locale, el.dataset.i18n as MessageKey);
   $('version').textContent = `v${chrome.runtime.getManifest().version}`;
   $('privacy').textContent = locale === 'ko' ? '브라우저 안에서만 처리' : 'Processed locally';
+  requestAnimationFrame(() => requestAnimationFrame(() => (document.body.dataset.ready = '1')));
 
   const primary = $('primaryFormats');
   for (const f of PRIMARY) primary.appendChild(formatButton(f));
@@ -300,6 +301,7 @@ function render(job: JobState | null): void {
 
   const tm = job.timings ?? {};
   const rows: Array<[MessageKey, number | undefined]> = [
+    ['timing.network', tm.networkMs],
     ['timing.collect', tm.collectMs],
     ['timing.assets', tm.assetsMs],
     ['timing.build', tm.processMs],
@@ -307,7 +309,7 @@ function render(job: JobState | null): void {
   ];
   timings.innerHTML = rows
     .filter(([, v]) => v != null)
-    .map(([k, v]) => `<span>${t(locale, k)} <b>${formatMs(v)}</b></span>`)
+    .map(([k, v]) => `<span title="${t(locale, `${k}.hint` as MessageKey)}">${t(locale, k)} <b>${formatMs(v)}</b></span>`)
     .join('');
   setEnabled(enabled);
 }

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { runHandoff } from '../../src/handoff/engine';
 import { englishScenario, koreanScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
+import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
+import { CHATGPT_ID, chatgptConversation } from '../fixtures/sites';
 
 /** Returns the body of the "## {prefix}…" section (until the next level-2 heading). */
 function section(md: string, prefix: string): string {
@@ -136,5 +138,18 @@ describe('handoff — incremental cache', () => {
     expect(second.stats.cacheMisses).toBeLessThanOrEqual(2);
     expect(second.stats.cacheHits).toBeGreaterThan(first.stats.cacheMisses * 0.5);
     expect(second.markdown).toMatch(/다크 모드를 추가해 주세요/);
+  });
+});
+
+describe('handoff — hidden reasoning', () => {
+  it('never copies thinking blocks into the handoff, including the reference index', () => {
+    const conv = parseChatGPTConversation(chatgptConversation(), { conversationId: CHATGPT_ID, url: `https://chatgpt.com/c/${CHATGPT_ID}` });
+    const thinking = conv.messages[1].contents.find((c) => c.type === 'thinking')?.content ?? '';
+    expect(thinking.length).toBeGreaterThan(0);
+    const { markdown } = runHandoff(conv);
+    for (const line of thinking.split('\n').map((l) => l.replace(/[*#]/g, '').trim()).filter((l) => l.length > 4)) {
+      expect(markdown).not.toContain(line);
+    }
+    expect(markdown).toMatch(/\| #m2 \| ChatGPT \| .+ \| 원인은/);
   });
 });

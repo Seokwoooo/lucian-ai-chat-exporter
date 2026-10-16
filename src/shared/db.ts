@@ -114,7 +114,10 @@ export async function putHandoffCache(rec: HandoffCacheRecord): Promise<void> {
   await tx('handoffCache', 'readwrite', (s) => s.put(rec));
 }
 
-/** Deletes expired conversations / handoff caches and trims the asset cache (tech doc §29.4, §30.5). */
+/**
+ * Deletes conversations, handoff caches and cached images/attachments older than the retention
+ * period, then trims the asset cache to MAX_ASSETS (tech doc §29.4, §30.5).
+ */
 export async function cleanupCaches(days = RETENTION_DAYS): Promise<{ conversations: number; assets: number }> {
   const db = await openDb();
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -144,28 +147,30 @@ export async function cleanupCaches(days = RETENTION_DAYS): Promise<{ conversati
       t.onerror = () => reject(t.error);
     });
   }
-  const assetKeys: string[] = await new Promise((resolve, reject) => {
-    const keys: string[] = [];
+  // Oldest first (lastReadTime index).
+  const assets: Array<{ key: string; lastRead: number }> = await new Promise((resolve, reject) => {
+    const rows: Array<{ key: string; lastRead: number }> = [];
     const t = db.transaction('assets', 'readonly');
     const cur = t.objectStore('assets').index('lastReadTime').openKeyCursor();
     cur.onsuccess = () => {
       const c = cur.result;
       if (c) {
-        keys.push(String(c.primaryKey));
+        rows.push({ key: String(c.primaryKey), lastRead: Number(c.key) });
         c.continue();
       }
     };
-    t.oncomplete = () => resolve(keys);
+    t.oncomplete = () => resolve(rows);
     t.onerror = () => reject(t.error);
   });
-  const excess = assetKeys.length - MAX_ASSETS;
-  if (excess > 0) {
+  const stale = assets.filter((a) => a.lastRead < cutoff).length;
+  const remove = Math.max(stale, assets.length - MAX_ASSETS);
+  if (remove > 0) {
     await new Promise<void>((resolve, reject) => {
       const t = db.transaction('assets', 'readwrite');
-      for (const k of assetKeys.slice(0, excess)) t.objectStore('assets').delete(k);
+      for (const a of assets.slice(0, remove)) t.objectStore('assets').delete(a.key);
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
     });
   }
-  return { conversations: expired.length, assets: Math.max(0, excess) };
+  return { conversations: expired.length, assets: remove };
 }

@@ -45,6 +45,8 @@ body {
   color: var(--text);
   font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
   -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -128,7 +130,9 @@ button { font: inherit; color: inherit; }
   font-size: 12.5px; padding: 2px 8px; border-radius: 6px; margin-top: -4px;
 }
 .more:hover { color: var(--text); }
-.more svg { width: 14px; height: 14px; transition: transform .2s ease; }
+.more svg { width: 14px; height: 14px; }
+/* Animate only after the first paint so a restored expanded state does not spin on open. */
+body[data-ready] .more svg { transition: transform .2s ease; }
 .more[aria-expanded="true"] svg { transform: rotate(180deg); }
 
 .status {

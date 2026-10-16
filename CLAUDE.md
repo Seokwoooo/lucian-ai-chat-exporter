@@ -29,7 +29,8 @@ npm run check        # typecheck + lint + test + build
 ```
 
 E2E needs Chrome for Testing (branded Chrome ≥137 ignores `--load-extension`):
-`npx @puppeteer/browsers install chrome@stable --path ~/.cache/lucian-cft` (or set `CHROME_PATH`).
+`npm run e2e:install-chrome` (installs into `~/.cache/lucian-cft`; or set `CHROME_PATH`). The E2E
+suite also measures a 1M-token conversation end to end (`bench-results/e2e-chrome-1m.json`).
 
 ## Architecture (see docs/architecture.md)
 
@@ -63,3 +64,9 @@ popup            src/popup/*                two cards: handoff button, export fo
   marked ⚠️ rather than guessed. Update `tests/handoff/accuracy.test.ts` when changing heuristics.
 - User-facing strings go through `src/shared/i18n.ts` (Korean default, English supported).
 - Fixtures must be synthetic — never commit real conversations, cookies or tokens.
+- Site structures change: when a real-site check finds a new shape (e.g. ChatGPT `channel:
+  "commentary"`, virtualized transcripts), add a synthetic fixture that mirrors it before fixing.
+- Documents show what the user saw: thinking is excluded (JSON/ZIP keep it), long tool output is
+  clipped to `TOOL_DOC_LIMIT` with a visible note; every such decision is reported in verification.
+- `scripts/build.mjs` strips the `new Function` branch from docx's bundled JSZip polyfill; CI fails
+  if `eval`/`new Function` appears in `dist/`.

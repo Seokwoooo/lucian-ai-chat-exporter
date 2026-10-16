@@ -1,4 +1,4 @@
-.print-bar{position:sticky;top:0;z-index:10;background:#18181b;color:#f4f4f5;font:13px/1.5 system-ui,-apple-system,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+.print-bar{position:sticky;top:0;z-index:10;background:#18181b;color:#f4f4f5;font:13px/1.5 system-ui,-apple-system,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif;word-break:keep-all}
 .print-bar-inner{max-width:840px;margin:0 auto;padding:12px 28px;display:flex;gap:16px;align-items:center;justify-content:space-between}
 .print-bar-text{display:flex;flex-direction:column;gap:2px}
 .print-bar-text span{color:#a1a1aa}

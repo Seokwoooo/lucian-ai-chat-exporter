@@ -121,6 +121,7 @@ const L = {
     clipped: '(길어서 가운데 일부 생략)',
     refs: '부록. 메시지 참조 색인',
     refsHead: '| 참조 | 역할 | 시각 | 첫 줄 |',
+    refsOmitted: '이전 참조 {n}개 생략',
     none: '_(해당 내용을 찾지 못했습니다)_',
     user: '사용자',
     uncertain: {
@@ -178,6 +179,7 @@ const L = {
     clipped: '(long message — middle part omitted)',
     refs: 'Appendix. Message reference index',
     refsHead: '| Ref | Role | Time | First line |',
+    refsOmitted: '{n} older references omitted',
     none: '_(nothing found)_',
     user: 'User',
     uncertain: {
@@ -400,11 +402,13 @@ export function renderHandoff(doc: HandoffDoc): string {
   out.push('|---|---|---|---|');
   const sorted = [...refs].sort((a, b) => a - b);
   const shown = sorted.length > 120 ? sorted.slice(-120) : sorted;
-  if (shown.length < sorted.length) out.push(`| … | | | ${sorted.length - shown.length} older references omitted |`);
+  if (shown.length < sorted.length) out.push(`| … | | | ${fill(S.refsOmitted, { n: sorted.length - shown.length })} |`);
   for (const m of shown) {
     const msg = conv.messages[m];
     if (!msg) continue;
-    const first = oneLine(msg.contents.find((c) => c.content)?.content ?? '', 40).replace(/\|/g, '\\|');
+    // Thinking is never shown in the handoff, so the index uses the visible answer text.
+    const visible = msg.contents.find((c) => (c.type === 'markdown' || c.type === 'text') && c.content) ?? msg.contents.find((c) => c.type !== 'thinking' && c.content);
+    const first = oneLine(visible?.content ?? '', 40).replace(/\|/g, '\\|');
     out.push(`| #m${m + 1} | ${roleName(msg.role)} | ${msg.created_at ? formatDateTime(msg.created_at) : '-'} | ${first} |`);
   }
   out.push('');

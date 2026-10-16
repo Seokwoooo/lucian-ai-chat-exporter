@@ -15,6 +15,25 @@ const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 rmSync(DIST, { recursive: true, force: true });
 mkdirSync(DIST, { recursive: true });
 
+/**
+ * docx ships a pre-bundled copy of JSZip whose setImmediate polyfill turns string callbacks into
+ * code with `new Function`. Extension pages must never evaluate strings (MV3 CSP, store review),
+ * so that branch is replaced with a TypeError. The build fails if the pattern ever changes.
+ */
+function noStringEvalPlugin() {
+  const PATTERN = '"function" != typeof e && (e = new Function("" + e));';
+  return {
+    name: 'no-string-eval',
+    setup(b) {
+      b.onLoad({ filter: /[\\/]node_modules[\\/]docx[\\/]dist[\\/]index\.mjs$/ }, (args) => {
+        const code = readFileSync(args.path, 'utf8');
+        if (!code.includes(PATTERN)) throw new Error('docx: setImmediate polyfill pattern not found; re-check for new Function');
+        return { contents: code.replace(PATTERN, 'if ("function" != typeof e) throw new TypeError("setImmediate: function expected");'), loader: 'js' };
+      });
+    },
+  };
+}
+
 const common = {
   bundle: true,
   minify: !dev,
@@ -25,6 +44,7 @@ const common = {
   logLevel: 'warning',
   metafile: true,
   define: { 'process.env.NODE_ENV': '"production"' },
+  plugins: [noStringEvalPlugin()],
 };
 
 const results = await Promise.all([

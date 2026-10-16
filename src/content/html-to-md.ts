@@ -42,6 +42,22 @@ function mathSource(el: Element): { tex: string; display: boolean } | null {
   return null;
 }
 
+/** UI chrome and screen-reader-only labels (e.g. "ChatGPT said:") are not message content. */
+function skipped(el: Element): boolean {
+  return SKIP_TAGS.has(el.tagName.toUpperCase()) || el.classList.contains('sr-only');
+}
+
+/**
+ * Plain-text containers that render with preserved line breaks (user messages are usually shown
+ * with white-space: pre-wrap). Their text is returned verbatim instead of being whitespace-folded.
+ */
+function preformattedText(el: Element): string | null {
+  const style = (el as HTMLElement).style?.whiteSpace ?? '';
+  if (!el.classList.contains('whitespace-pre-wrap') && !/^pre/.test(style)) return null;
+  if (el.querySelector('p,pre,ul,ol,table,blockquote,h1,h2,h3,h4,h5,h6')) return null;
+  return (el.textContent ?? '').replace(/\r\n?/g, '\n');
+}
+
 interface Ctx {
   listDepth: number;
 }
@@ -50,7 +66,7 @@ function inline(node: Node, ctx: Ctx): string {
   if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? '').replace(/\s+/g, ' ');
   if (node.nodeType !== Node.ELEMENT_NODE) return '';
   const el = node as Element;
-  if (SKIP_TAGS.has(el.tagName.toUpperCase())) return '';
+  if (skipped(el)) return '';
   const math = mathSource(el);
   if (math) return math.display ? `\n\n$$\n${math.tex}\n$$\n\n` : `$${math.tex}$`;
   const tag = el.tagName.toUpperCase();
@@ -133,7 +149,7 @@ function blocks(root: Element, ctx: Ctx): string {
     }
     const el = node as Element;
     const tag = el.tagName.toUpperCase();
-    if (SKIP_TAGS.has(tag)) continue;
+    if (skipped(el)) continue;
     const math = mathSource(el);
     if (math && math.display) {
       flush();
@@ -142,6 +158,12 @@ function blocks(root: Element, ctx: Ctx): string {
     }
     if (math) {
       inlineBuf += `$${math.tex}$`;
+      continue;
+    }
+    const pre = preformattedText(el);
+    if (pre != null) {
+      flush();
+      if (pre.trim()) parts.push(pre.replace(/^\n+|\s+$/g, ''));
       continue;
     }
     switch (tag) {
@@ -213,6 +235,8 @@ function blocks(root: Element, ctx: Ctx): string {
 }
 
 export function htmlToMarkdown(root: Element): string {
+  const pre = preformattedText(root);
+  if (pre != null) return pre.trim();
   return blocks(root, { listDepth: 0 })
     .replace(/\n{3,}/g, '\n\n')
     .trim();

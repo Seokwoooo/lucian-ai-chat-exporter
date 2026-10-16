@@ -5,7 +5,7 @@
 import { t, formatBytes, type Locale } from '../shared/i18n';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { escapeHtml, formatDateTime } from '../shared/util';
-import { messageHeaderText, roleLabel } from './markdown';
+import { messageHeaderText, roleLabel, toolDocText } from './markdown';
 import { lex, type Token, type Tokens } from './md-parse';
 
 export interface HtmlEnv {
@@ -210,7 +210,7 @@ function renderContent(c: ExportContent, ctx: Ctx): string {
       return codeFigure(c.content ?? '', c.language, c.title);
     case 'tool':
       ctx.stats.codeBlocks++;
-      return `<div class="tool">${codeFigure(c.content ?? '', c.language, `${t(L, 'doc.tool')} · ${c.title ?? ''}`)}</div>`;
+      return `<div class="tool">${codeFigure(toolDocText(c.content ?? '', L), c.language, `${t(L, 'doc.tool')} · ${c.title ?? ''}`)}</div>`;
     case 'artifact':
     case 'html_widget':
       ctx.stats.codeBlocks++;

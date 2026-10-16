@@ -10,6 +10,7 @@ import {
   jobStorageKey,
   type AssetRequest,
   type AssetStatus,
+  type BuildRequest,
   type BuildResponse,
   type FromContent,
   type PopupRequest,
@@ -165,6 +166,8 @@ async function startJob(kind: JobKind, format: ExportFormat | undefined, tabId: 
 async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Promise<void> {
   const tabId = job.tabId;
   const t0 = performance.now();
+  // Retention is also enforced here, not only at browser start, for browsers left open for days.
+  void cleanupCaches().catch(() => undefined);
   await ensureContentScript(tabId);
   const port = chrome.tabs.connect(tabId, { name: COLLECT_PORT });
   try {
@@ -211,7 +214,8 @@ async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Prom
       format: job.format,
       locale,
       assets,
-    })) as BuildResponse | undefined;
+      appVersion: chrome.runtime.getManifest().version,
+    } satisfies BuildRequest)) as BuildResponse | undefined;
     if (!res?.ok || !res.blobUrl || !res.filename || res.bytes == null || !res.verification) throw new JobError('BUILD_FAILED', res?.error);
     job.timings = { ...job.timings, ...res.timings };
 

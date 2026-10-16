@@ -171,7 +171,8 @@ export function segmentMessage(msg: ExportMessage, m: number, units: Unit[]): vo
         pushUnit(units, m, role, 'code', c.content ?? '', { lang: c.type === 'html_widget' ? 'html' : c.language, title: c.title });
         break;
       case 'tool':
-        pushUnit(units, m, role, 'code', c.content ?? '', { lang: c.language ?? 'text', title: `tool:${c.title ?? ''}` });
+        // Tool output (fetched pages, command logs) is clipped like in documents.
+        pushUnit(units, m, role, 'code', (c.content ?? '').slice(0, 2_000), { lang: c.language ?? 'text', title: `tool:${c.title ?? ''}` });
         break;
       case 'attachment':
         if (c.attachment?.name) pushUnit(units, m, role, 'attachment', c.attachment.name);

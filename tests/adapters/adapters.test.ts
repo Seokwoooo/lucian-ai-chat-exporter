@@ -4,7 +4,7 @@ import { parseClaudeConversation, selectClaudePath } from '../../src/content/ada
 import { buildGeminiConversation, extractReadChatPage, parseBatchExecute } from '../../src/content/adapters/gemini';
 import { cleanGrokMarkdown, parseGrokConversation } from '../../src/content/adapters/grok';
 import { extractConversationId, detectSite } from '../../src/shared/sites';
-import { CHATGPT_ID, CLAUDE_ID, GEMINI_ID, GROK_ID, chatgptConversation, claudeConversation, geminiPage, grokPayloads } from '../fixtures/sites';
+import { CHATGPT_ID, CLAUDE_ID, GEMINI_ID, GROK_ID, chatgptConversation, chatgptModernConversation, claudeConversation, geminiPage, grokPayloads } from '../fixtures/sites';
 
 describe('site detection and conversation ids', () => {
   it('extracts ids from the supported URL shapes', () => {
@@ -49,6 +49,20 @@ describe('ChatGPT adapter', () => {
 
   it('stores the regenerated answer as another branch', () => {
     expect(conv.otherBranchMessages?.[0].messages[0].contents[0].content).toContain('다시 생성됨');
+  });
+
+  it('keeps reasoning-model preambles and container runs out of the answer text (2026-10 shape)', () => {
+    const modern = parseChatGPTConversation(chatgptModernConversation(), { conversationId: CHATGPT_ID, url: `https://chatgpt.com/c/${CHATGPT_ID}` });
+    expect(modern.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    const a = modern.messages[1];
+    expect(a.contents.map((c) => c.type)).toEqual(['thinking', 'thinking', 'thinking', 'markdown']);
+    expect(a.contents.find((c) => c.title === 'commentary')?.content).toBe('먼저 파일 목록을 확인하겠습니다.');
+    expect(a.contents.at(-1)?.content).toContain('구조 분석 결과입니다.');
+    expect(a.contents.some((c) => c.type === 'tool' || c.type === 'code')).toBe(false);
+    expect(modern.extraction.skipped.map((s) => s.reason)).toEqual(
+      expect.arrayContaining(['tool-call:container.exec', 'tool:container.exec', 'tool-call:web.run', 'tool:web.run']),
+    );
+    expect(modern.extraction.missingNodeIds).toEqual([]);
   });
 
   it('strips unmatched private-use citation markers', () => {

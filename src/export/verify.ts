@@ -5,6 +5,7 @@ import { unzipSync, strFromU8 } from 'fflate';
 import type { AssetStatus } from '../shared/messages';
 import type { Conversation, ExportFormat, Verification, VerificationCheck, VerificationCounts } from '../shared/types';
 import { countAttachments, countImageRefs } from './images';
+import { TOOL_DOC_LIMIT } from './markdown';
 import { lex, statsOf } from './md-parse';
 
 export interface FormatStats {
@@ -31,8 +32,10 @@ function contentStats(conv: Conversation) {
   let codeBlocks = 0;
   let math = 0;
   let thinking = 0;
+  let toolsClipped = 0;
   for (const m of conv.messages) {
     for (const c of m.contents) {
+      if (c.type === 'tool' && (c.content?.length ?? 0) > TOOL_DOC_LIMIT) toolsClipped++;
       if (c.type === 'thinking') thinking++;
       else if (c.type === 'code' || c.type === 'tool' || c.type === 'artifact' || c.type === 'html_widget') codeBlocks++;
       else if ((c.type === 'text' || c.type === 'markdown') && c.content) {
@@ -43,7 +46,7 @@ function contentStats(conv: Conversation) {
       }
     }
   }
-  return { tables, codeBlocks, math, thinking };
+  return { tables, codeBlocks, math, thinking, toolsClipped };
 }
 
 export function buildVerification(
@@ -58,7 +61,9 @@ export function buildVerification(
   const cs = contentStats(conv);
   const userMessages = conv.messages.filter((m) => m.role === 'user').length;
 
-  if (missing === 0) checks.push({ code: 'messages.match', status: 'pass', params: { exported: source, source } });
+  // Source nodes (tool steps, reasoning, answer parts) can be merged into fewer document messages,
+  // so both numbers are reported.
+  if (missing === 0) checks.push({ code: 'messages.match', status: 'pass', params: { exported: source, source, messages: conv.messages.length } });
   else checks.push({ code: 'messages.missing', status: 'fail', params: { missing } });
   if (ex.domUserTurns != null && ex.domUserTurns > userMessages) {
     checks.push({ code: 'dom.more', status: 'warn', params: { dom: ex.domUserTurns, exported: userMessages } });
@@ -103,6 +108,10 @@ export function buildVerification(
       } else {
         checks.push({ code: 'attachments.meta', status: 'info', params: { total: att.total } });
       }
+      if (att.withText > 0) checks.push({ code: 'attachments.text', status: 'info', params: { n: att.withText } });
+    }
+    if (format !== 'json' && cs.toolsClipped > 0) {
+      checks.push({ code: 'tools.clipped', status: 'info', params: { n: cs.toolsClipped } });
     }
 
     if (cs.math > 0) {

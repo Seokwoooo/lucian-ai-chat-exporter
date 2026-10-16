@@ -4,7 +4,7 @@ import { t, formatBytes, type Locale } from '../../shared/i18n';
 import type { Conversation, ExportContent, ExportMessage } from '../../shared/types';
 import { escapeXml, formatDateTime } from '../../shared/util';
 import { EMBEDDABLE, fitSize, type ImageStore } from '../images';
-import { messageHeaderText } from '../markdown';
+import { messageHeaderText, toolDocText } from '../markdown';
 import { lex, type Token, type Tokens } from '../md-parse';
 import {
   BF_CODE,
@@ -439,7 +439,7 @@ export class SectionWriter {
         break;
       case 'tool':
         this.caption(`${t(L, 'doc.tool')} · ${c.title ?? ''}`);
-        this.push(this.codeBox(c.content ?? '', c.language));
+        this.push(this.codeBox(toolDocText(c.content ?? '', L), c.language));
         break;
       case 'artifact':
       case 'html_widget':

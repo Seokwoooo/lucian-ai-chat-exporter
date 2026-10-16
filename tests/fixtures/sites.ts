@@ -181,3 +181,37 @@ export function grokPayloads() {
   ];
   return { detail: { conversation: { conversationId: GROK_ID, title: '날씨 API', createTime: iso(0) } }, nodes: { responseNodes: nodes, inflightResponses: [] }, responses: { responses } };
 }
+
+/**
+ * ChatGPT payload shaped like a 2026-10 reasoning-model conversation (structure observed on
+ * chatgpt.com; all text is synthetic): preamble messages on the "commentary" channel, code run
+ * through "container.exec", web.run calls, a reasoning recap and the final answer.
+ */
+export function chatgptModernConversation() {
+  const node = (id: string, parent: string | null, children: string[], message: unknown) => ({ id, parent, children, message });
+  const msg = (id: string, role: string, content: unknown, extra: Record<string, unknown> = {}) => ({
+    id,
+    author: { role, name: extra.authorName ?? null },
+    create_time: t(10),
+    content,
+    metadata: extra.metadata ?? {},
+    recipient: extra.recipient ?? 'all',
+    channel: extra.channel ?? null,
+  });
+  const chain: Array<[string, unknown]> = [
+    ['u1', msg('u1', 'user', { content_type: 'text', parts: ['리포지토리 구조를 분석해 줘.'] })],
+    ['th1', msg('th1', 'assistant', { content_type: 'thoughts', thoughts: [{ summary: '계획', content: '파일 목록부터 확인한다.' }] })],
+    ['pre1', msg('pre1', 'assistant', { content_type: 'text', parts: ['먼저 파일 목록을 확인하겠습니다.'] }, { channel: 'commentary', metadata: { is_thinking_preamble_message: true } })],
+    ['exec1', msg('exec1', 'assistant', { content_type: 'code', language: 'unknown', text: 'ls -la /mnt/data' }, { recipient: 'container.exec' })],
+    ['out1', msg('out1', 'tool', { content_type: 'execution_output', text: 'total 0' }, { authorName: 'container.exec' })],
+    ['web1', msg('web1', 'assistant', { content_type: 'text', parts: ['{"search_query":[{"q":"vite docs"}]}'] }, { recipient: 'web.run' })],
+    ['webout1', msg('webout1', 'tool', { content_type: 'text', parts: ['search results'] }, { authorName: 'web.run' })],
+    ['recap', msg('recap', 'assistant', { content_type: 'reasoning_recap', content: '12초 동안 생각함' })],
+    ['final', msg('final', 'assistant', { content_type: 'text', parts: ['구조 분석 결과입니다.\n\n- src/: 소스'] }, { channel: 'final', metadata: { model_slug: 'gpt-5-thinking' } })],
+  ];
+  const mapping: Record<string, unknown> = { root: node('root', null, [chain[0][0]], null) };
+  chain.forEach(([id, m], i) => {
+    mapping[id] = node(id, i === 0 ? 'root' : chain[i - 1][0], i + 1 < chain.length ? [chain[i + 1][0]] : [], m);
+  });
+  return { title: '구조 분석', create_time: t(10), update_time: t(11), mapping, current_node: 'final', default_model_slug: 'gpt-5-thinking' };
+}
