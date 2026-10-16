@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lucian AI Chat Exporter</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="22" height="22" rx="6" fill="currentColor"/><path d="M8.5 6.5v10.5h7" fill="none" stroke="var(--logo-ink)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="brand-name">Lucian</span>
+    </div>
+    <div class="site" id="site" hidden><span class="site-dot" aria-hidden="true"></span><span id="siteName"></span></div>
+  </header>
+
+  <div class="context" id="context"></div>
+
+  <div class="notice" id="notice" role="status" hidden>
+    <svg class="notice-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v5M12 16.5v.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <div>
+      <strong id="noticeTitle"></strong>
+      <p id="noticeDesc"></p>
+      <div class="site-links" id="siteLinks"></div>
+    </div>
+  </div>
+
+  <section class="card" aria-labelledby="hHandoff">
+    <div class="card-head">
+      <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11m0 0-3.5-3.5M15 7l-3.5 3.5M20 17H9m0 0 3.5-3.5M9 17l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div>
+        <h2 id="hHandoff" data-i18n="handoff.title"></h2>
+        <p data-i18n="handoff.desc"></p>
+      </div>
+    </div>
+    <button type="button" class="btn-primary" id="handoffBtn">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span data-i18n="handoff.button"></span>
+    </button>
+  </section>
+
+  <section class="card" aria-labelledby="hExport">
+    <div class="card-head">
+      <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3v5h5M10 13h6M10 17h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <div>
+        <h2 id="hExport" data-i18n="export.title"></h2>
+        <p data-i18n="export.desc"></p>
+      </div>
+    </div>
+    <div class="formats" id="primaryFormats"></div>
+    <button type="button" class="more" id="moreBtn" aria-expanded="false" aria-controls="moreFormats">
+      <span id="moreLabel"></span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="formats more-formats" id="moreFormats" hidden></div>
+  </section>
+
+  <section class="status" id="status" aria-live="polite" hidden>
+    <div class="status-head">
+      <span class="status-icon" id="statusIcon" aria-hidden="true"></span>
+      <span class="status-text" id="statusText"></span>
+    </div>
+    <div class="progress" id="progress" hidden><div class="progress-bar" id="progressBar"></div></div>
+    <div class="status-sub" id="statusSub"></div>
+    <div class="timings" id="timings"></div>
+    <div class="status-actions" id="statusActions">
+      <button type="button" class="link-btn" id="detailsBtn" aria-expanded="false" aria-controls="checks" hidden></button>
+      <button type="button" class="link-btn" id="openBtn" hidden></button>
+      <button type="button" class="link-btn" id="retryBtn" hidden></button>
+    </div>
+    <ul class="checks" id="checks" hidden></ul>
+  </section>
+
+  <footer class="foot"><span id="version"></span><span aria-hidden="true">·</span><span id="privacy"></span></footer>
+</div>
+<script type="module" src="popup.js"></script>
+</body>
+</html>

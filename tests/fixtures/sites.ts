@@ -1,0 +1,183 @@
+// Synthetic API payloads shaped like the real services' responses (structure only; all text is
+// invented). Used by adapter unit tests and by the browser E2E test that mocks each site.
+
+export const CHATGPT_ID = '6710a3b2-1111-4222-8333-944455556666';
+export const CLAUDE_ID = '0a1b2c3d-4e5f-4061-8273-8495a6b7c8d9';
+export const CLAUDE_ORG = '11111111-aaaa-4bbb-8ccc-dddddddddddd';
+export const GEMINI_ID = 'a1b2c3d4e5f60718';
+export const GROK_ID = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f';
+
+const t = (min: number) => 1760000000 + min * 60; // epoch seconds
+
+/** ChatGPT /backend-api/conversation/{id} — tree with a regenerated answer and tool nodes. */
+export function chatgptConversation() {
+  const node = (id: string, parent: string | null, children: string[], message: unknown) => ({ id, parent, children, message });
+  const msg = (id: string, role: string, content: unknown, extra: Record<string, unknown> = {}) => ({
+    id,
+    author: { role, name: extra.authorName ?? null },
+    create_time: extra.time ?? null,
+    content,
+    metadata: extra.metadata ?? {},
+    recipient: extra.recipient ?? 'all',
+  });
+  const mapping: Record<string, unknown> = {
+    'client-created-root': node('client-created-root', null, ['sys'], null),
+    sys: node('sys', 'client-created-root', ['ctx'], msg('sys', 'system', { content_type: 'text', parts: [''] }, { metadata: { is_visually_hidden_from_conversation: true } })),
+    ctx: node('ctx', 'sys', ['u1'], msg('ctx', 'user', { content_type: 'user_editable_context', user_profile: 'x' }, { metadata: { is_visually_hidden_from_conversation: true } })),
+    u1: node(
+      'u1',
+      'ctx',
+      ['a1-old', 'a1-think'],
+      msg(
+        'u1',
+        'user',
+        {
+          content_type: 'multimodal_text',
+          parts: [{ content_type: 'image_asset_pointer', asset_pointer: 'sediment://file_000000001', width: 640, height: 360 }, '이 스크린샷의 오류를 분석하고 수정 코드를 알려줘.'],
+        },
+        { time: t(0), metadata: { attachments: [{ id: 'file_000000001', name: 'screen.png', mime_type: 'image/png' }, { id: 'file-doc-2', name: 'spec.pdf', mime_type: 'application/pdf', size: 52000 }] } },
+      ),
+    ),
+    'a1-old': node('a1-old', 'u1', [], msg('a1-old', 'assistant', { content_type: 'text', parts: ['이전에 생성된 답변 (다시 생성됨).'] }, { time: t(1), metadata: { model_slug: 'gpt-5' } })),
+    'a1-think': node('a1-think', 'u1', ['a1-code'], msg('a1-think', 'assistant', { content_type: 'thoughts', thoughts: [{ summary: '원인 분석', content: '널 체크가 빠졌다.' }] }, { time: t(2) })),
+    'a1-code': node('a1-code', 'a1-think', ['a1-out'], msg('a1-code', 'assistant', { content_type: 'code', language: 'python', text: 'print(1 + 1)' }, { time: t(2), recipient: 'python' })),
+    'a1-out': node('a1-out', 'a1-code', ['a1-search'], msg('a1-out', 'tool', { content_type: 'execution_output', text: '2' }, { time: t(2), authorName: 'python' })),
+    'a1-search': node('a1-search', 'a1-out', ['a1'], msg('a1-search', 'assistant', { content_type: 'code', language: 'unknown', text: '{"query":"null check"}' }, { time: t(2), recipient: 'web.run' })),
+    a1: node(
+      'a1',
+      'a1-search',
+      ['u2'],
+      msg(
+        'a1',
+        'assistant',
+        {
+          content_type: 'text',
+          parts: [
+            '원인은 `user`가 `null`일 때 접근하기 때문입니다.citeturn0search1\n\n```ts\nif (user) {\n\tconsole.log(user.name);\n}\n```\n\n| 항목 | 값 |\n|---|---|\n| 원인 | null 접근 |\n\n수식: \\(E = mc^2\\)',
+          ],
+        },
+        {
+          time: t(3),
+          metadata: {
+            model_slug: 'gpt-5',
+            content_references: [
+              { matched_text: 'citeturn0search1', start_idx: 40, end_idx: 60, type: 'grouped_webpages', alt: '([MDN](https://developer.mozilla.org/))', items: [{ title: 'MDN', url: 'https://developer.mozilla.org/' }] },
+            ],
+          },
+        },
+      ),
+    ),
+    u2: node('u2', 'a1', ['a2'], msg('u2', 'user', { content_type: 'text', parts: ['캔버스로 정리해 줘.'] }, { time: t(4) })),
+    a2: node(
+      'a2',
+      'u2',
+      [],
+      msg('a2', 'assistant', { content_type: 'code', language: 'json', text: JSON.stringify({ name: 'fix.ts', type: 'code/typescript', content: 'export const ok = true;\n' }) }, { time: t(5), recipient: 'canmore.create_textdoc' }),
+    ),
+  };
+  // Fix start/end indices of the citation to the real position.
+  const a1 = (mapping.a1 as { message: { content: { parts: string[] }; metadata: { content_references: Array<{ start_idx: number; end_idx: number; matched_text: string }> } } }).message;
+  const text = a1.content.parts[0];
+  const ref = a1.metadata.content_references[0];
+  ref.start_idx = text.indexOf(ref.matched_text);
+  ref.end_idx = ref.start_idx + ref.matched_text.length;
+  return { title: 'Null 오류 분석', create_time: t(0), update_time: t(5), mapping, current_node: 'a2', default_model_slug: 'gpt-5', conversation_id: CHATGPT_ID };
+}
+
+/** Claude chat_conversations/{id}?tree=True&rendering_mode=messages&render_all_tools=true */
+export function claudeConversation() {
+  const iso = (min: number) => new Date(t(min) * 1000).toISOString();
+  const ROOT = '00000000-0000-4000-8000-000000000000';
+  const m = (uuid: string, parent: string, sender: 'human' | 'assistant', index: number, content: unknown[], extra: Record<string, unknown> = {}) => ({
+    uuid,
+    parent_message_uuid: parent,
+    sender,
+    index,
+    created_at: iso(index),
+    updated_at: iso(index),
+    text: '',
+    content,
+    attachments: [],
+    files_v2: [],
+    truncated: false,
+    ...extra,
+  });
+  return {
+    uuid: CLAUDE_ID,
+    name: 'React 컴포넌트 리팩터링',
+    model: 'claude-sonnet-test',
+    created_at: iso(0),
+    updated_at: iso(6),
+    current_leaf_message_uuid: 'c-a2',
+    chat_messages: [
+      m('c-u1', ROOT, 'human', 0, [{ type: 'text', text: '이 컴포넌트를 훅으로 바꿔줘.' }], {
+        attachments: [{ file_name: 'Old.jsx', file_size: 1200, file_type: 'text/javascript', extracted_content: 'class Old extends React.Component {}' }],
+        files_v2: [{ file_kind: 'image', file_uuid: 'img-1', file_name: 'ui.png', preview_url: `/api/${CLAUDE_ORG}/files/img-1/preview`, preview_asset: { url: `/api/${CLAUDE_ORG}/files/img-1/preview`, image_width: 800, image_height: 450 } }],
+      }),
+      m('c-a1', 'c-u1', 'assistant', 1, [
+        { type: 'thinking', thinking: '클래스 컴포넌트를 함수형으로 변환.' },
+        { type: 'tool_use', name: 'web_search', input: { query: 'react hooks migration' } },
+        { type: 'tool_result', name: 'web_search', content: [{ type: 'knowledge', title: 'React Docs', url: 'https://react.dev/reference/react' }] },
+        { type: 'text', text: '다음과 같이 변환했습니다.', citations: [] },
+        { type: 'tool_use', name: 'artifacts', input: { id: 'new-comp', type: 'application/vnd.ant.code', language: 'jsx', title: 'NewComp.jsx', command: 'create', content: 'export function NewComp() {\n  return <div/>;\n}\n' } },
+      ]),
+      m('c-u2', 'c-a1', 'human', 2, [{ type: 'text', text: '테스트도 추가해줘.' }]),
+      m('c-a2-old', 'c-u2', 'assistant', 3, [{ type: 'text', text: '(이전 분기 답변)' }]),
+      m('c-a2', 'c-u2', 'assistant', 4, [{ type: 'text', text: '테스트를 추가했습니다.\n\n```js\ntest("renders", () => {});\n```' }]),
+    ],
+  };
+}
+
+/** One Gemini turn: [[convId, respId], null, [[prompt]], [[candidates], null, null, chosenId], [sec, nanos]] */
+function geminiTurn(i: number, prompt: string, answer: string, imageUrl?: string) {
+  const cand = [`rc_${i}`, [answer], null, null, null, null, null, null, null, 'ko'];
+  if (imageUrl) cand.push([[[null, null, null, [null, null, imageUrl]]]] as never);
+  cand.push('2.5 Pro' as never);
+  return [[`c_${GEMINI_ID}`, `r_${i}`], null, [[prompt], 1, null, 0], [[cand], null, null, `rc_${i}`], [t(i), 0]];
+}
+
+function geminiFrame(payload: unknown): string {
+  const inner = JSON.stringify(payload);
+  const frame = JSON.stringify([['wrb.fr', 'hNvQHb', inner, null, null, null, 'generic'], ['di', 42], ['af.httprm', 41, '-123', 3]]);
+  const tail = JSON.stringify([['e', 4, null, null, 1234]]);
+  return `)]}'\n\n${frame.length}\n${frame}\n${tail.length}\n${tail}\n`;
+}
+
+/** Page 1 (no cursor sent) returns the newest turns + cursor; page 2 returns the oldest turns. */
+export function geminiPage(cursor: string | null): string {
+  if (!cursor) {
+    const turns = [geminiTurn(4, '마지막 질문: 표로 정리해줘', '| 언어 | 특징 |\n|---|---|\n| Rust | 안전 |\n| Go | 단순 |'), geminiTurn(3, '세 번째 질문', '세 번째 답변 $x^2$', 'https://lh3.googleusercontent.com/gemini-test-image')];
+    return geminiFrame([turns, 'cursor-page-2', null, []]);
+  }
+  const turns = [geminiTurn(2, '두 번째 질문', '두 번째 답변'), geminiTurn(1, '첫 질문: Rust와 Go를 비교해줘', '첫 답변입니다.')];
+  return geminiFrame([turns, null, null, []]);
+}
+
+export function grokPayloads() {
+  const iso = (min: number) => new Date(t(min) * 1000).toISOString();
+  const nodes = [
+    { responseId: 'g-u1', sender: 'human' },
+    { responseId: 'g-a1', sender: 'assistant', parentResponseId: 'g-u1' },
+    { responseId: 'g-u2', sender: 'human', parentResponseId: 'g-a1' },
+    { responseId: 'g-a2-old', sender: 'assistant', parentResponseId: 'g-u2' },
+    { responseId: 'g-a2', sender: 'assistant', parentResponseId: 'g-u2' },
+    { responseId: 'g-a3-partial', sender: 'assistant', parentResponseId: 'g-a2' },
+  ];
+  const responses = [
+    { responseId: 'g-u1', sender: 'human', message: '오늘 날씨 API를 추천해줘', createTime: iso(0) },
+    {
+      responseId: 'g-a1',
+      sender: 'assistant',
+      model: 'grok-test',
+      createTime: iso(1),
+      message: 'OpenWeather를 추천합니다.<grok:render type="render_inline_citation"><argument name="citation_id">0</argument></grok:render>',
+      webSearchResults: [{ url: 'https://openweathermap.org/api', title: 'OpenWeather API', preview: 'weather' }],
+      thinkingTrace: '날씨 API 후보 검토',
+    },
+    { responseId: 'g-u2', sender: 'human', message: '예제 코드도 줘', createTime: iso(2) },
+    { responseId: 'g-a2-old', sender: 'assistant', message: '(이전 답변)', createTime: iso(3) },
+    { responseId: 'g-a2', sender: 'assistant', model: 'grok-test', message: '```python\nimport requests\nprint(requests.get(URL).json())\n```', createTime: iso(4), generatedImageUrls: ['users/u1/generated/img1/image.jpg'] },
+    { responseId: 'g-a3-partial', sender: 'assistant', message: '작성 중…', createTime: iso(5), partial: true },
+  ];
+  return { detail: { conversation: { conversationId: GROK_ID, title: '날씨 API', createTime: iso(0) } }, nodes: { responseNodes: nodes, inflightResponses: [] }, responses: { responses } };
+}

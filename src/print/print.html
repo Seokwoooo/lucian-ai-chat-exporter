@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lucian AI Chat Exporter</title>
+<link rel="stylesheet" href="print-ui.css">
+</head>
+<body>
+<div class="print-bar no-print" role="region" aria-label="PDF">
+  <div class="print-bar-inner">
+    <div class="print-bar-text">
+      <strong id="barTitle"></strong>
+      <span id="barDesc"></span>
+    </div>
+    <button type="button" id="printBtn" class="print-btn"></button>
+  </div>
+</div>
+<main id="doc" aria-busy="true"><p class="loading" id="loading"></p></main>
+<script type="module" src="print.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+release/
+*.zip
+!tests/fixtures/**/*.zip
+
+# test / bench artifacts
+coverage/
+test-output/
+.e2e-downloads/
+bench-results/*.local.json
+
+# local reference material (third-party analysis, not for publication)
+docs/AI_Exporter_상세_작동원리_기술문서.md
+
+# environment / secrets
+.env
+.env.*
+*.pem
+*.key
+*.crx
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+bench-results/bench.mjs
+bench-results/sample-*.md

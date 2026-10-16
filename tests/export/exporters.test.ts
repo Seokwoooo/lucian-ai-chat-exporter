@@ -1,0 +1,148 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { strFromU8, unzipSync } from 'fflate';
+import { Window } from 'happy-dom';
+import { describe, expect, it } from 'vitest';
+import { renderMathMl } from '../../src/export/math';
+import { conversationToMarkdown } from '../../src/export/markdown';
+import { runExport, type PipelineInput } from '../../src/export/pipeline';
+import { markdownToTxt } from '../../src/export/txt';
+import type { AssetStatus } from '../../src/shared/messages';
+import type { ExportFormat } from '../../src/shared/types';
+import { IMG_A, IMG_B, IMG_MISSING, sampleConversation, sampleImages } from '../fixtures/sample-conversation';
+
+const win = new Window();
+const parser = new win.DOMParser();
+const assets: AssetStatus[] = [
+  { key: IMG_A, kind: 'image', ok: true, mime: 'image/png' },
+  { key: IMG_B, kind: 'image', ok: true, mime: 'image/png' },
+  { key: IMG_MISSING, kind: 'image', ok: false, error: 'HTTP 404' },
+];
+
+function input(format: Exclude<ExportFormat, 'pdf'>): PipelineInput {
+  const images = sampleImages();
+  return {
+    conv: sampleConversation(),
+    format,
+    locale: 'ko',
+    embeddable: images,
+    raw: images,
+    assetStatus: assets.map((a) => ({ ...a })),
+    renderMath: renderMathMl,
+    parseXml: (s) => parser.parseFromString(s, 'application/xml') as unknown as Document,
+    parseHtml: (s) => parser.parseFromString(s, 'text/html') as unknown as Document,
+    exportedAt: Date.UTC(2026, 9, 16),
+  };
+}
+
+mkdirSync('test-output', { recursive: true });
+
+describe('markdown serializer', () => {
+  const md = conversationToMarkdown(sampleConversation(), { locale: 'ko' }).text;
+  it('keeps code fences with language and content containing backticks', () => {
+    expect(md).toContain('```ts\nexport function fib');
+    expect(md).toContain('\tif (n < 2) return n;');
+    expect(md).toMatch(/````markdown\n# Title\n\nSome text with ```code``` fence\.\n````/);
+  });
+  it('keeps tables, math, links and image references', () => {
+    expect(md).toContain('| 메모이제이션 | $O(n)$ | **권장** |');
+    expect(md).toContain('$$\nF_n = ');
+    expect(md).toContain('[MDN 링크](https://developer.mozilla.org/)');
+    expect(md).toContain(`![chart](${IMG_B})`);
+  });
+  it('excludes thinking by default and lists sources and attachments', () => {
+    expect(md).not.toContain('사용자는 재귀 구현을 원한다');
+    expect(md).toContain('1. [Fibonacci sequence - Wikipedia](https://en.wikipedia.org/wiki/Fibonacci_sequence)');
+    expect(md).toContain('첨부파일: **requirements.txt** (text/plain, 2.0 KB)');
+  });
+});
+
+describe('math', () => {
+  it('renders LaTeX to MathML and reports failures', () => {
+    expect(renderMathMl('\\frac{1}{2}', false)).toContain('<math');
+    expect(renderMathMl('\\frac{1}{', false)).toBeNull();
+  });
+});
+
+describe('txt', () => {
+  it('flattens markdown but keeps code and table cells', () => {
+    const txt = markdownToTxt('# T\n\n**bold** [l](https://x.y)\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```js\nx()\n```');
+    expect(txt).toContain('bold l (https://x.y)');
+    expect(txt).toContain('a | b');
+    expect(txt).toContain('[js]\nx()');
+  });
+});
+
+describe.each(['md', 'txt', 'json', 'html', 'docx', 'hwpx', 'zip'] as const)('export %s', (format) => {
+  it('builds a structurally valid file and reports gaps honestly', async () => {
+    const out = await runExport(input(format));
+    writeFileSync(`test-output/sample.${format}`, out.bytes);
+    expect(out.bytes.byteLength).toBeGreaterThan(200);
+    const codes = out.verification.checks.map((c) => `${c.status}:${c.code}`);
+    expect(codes).toContain('pass:output.ok');
+    expect(codes).toContain('pass:messages.match');
+    if (['html', 'docx', 'hwpx', 'zip'].includes(format)) {
+      expect(codes).toContain('warn:images.missing');
+      expect(out.verification.level).toBe('warning');
+    } else {
+      expect(codes).toContain('info:images.linked');
+    }
+    expect(codes).toContain(format === 'json' ? 'info:thinking.kept' : 'info:thinking.excluded');
+    expect(codes).toContain(format === 'json' || format === 'zip' ? 'info:branches.saved' : 'info:branches.note');
+    if (format === 'docx' || format === 'hwpx' || format === 'txt') expect(codes).toContain('info:math.latex');
+    if (format === 'html' || format === 'zip') expect(codes).toContain('pass:math.rendered');
+  });
+});
+
+describe('format specifics', () => {
+  it('html escapes raw HTML from messages and embeds images as data URLs', async () => {
+    const html = new TextDecoder().decode((await runExport(input('html'))).bytes);
+    expect(html).toContain('&lt;div&gt;태그&lt;/div&gt;');
+    expect(html).not.toContain('<div>태그</div>');
+    expect(html).toMatch(/<img src="data:image\/png;base64,/);
+    expect(html).toContain('<math');
+    expect((html.match(/<section class="msg /g) ?? []).length).toBe(4);
+  });
+
+  it('docx contains real tables, hyperlinks and embedded pictures', async () => {
+    const files = unzipSync((await runExport(input('docx'))).bytes);
+    const doc = strFromU8(files['word/document.xml']);
+    expect((doc.match(/<w:tbl>/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(doc).toContain('<w:hyperlink');
+    expect(Object.keys(files).filter((f) => /^word\/media\/.+\.png$/.test(f)).length).toBe(2);
+    expect(doc).toContain('xml:space="preserve"');
+  });
+
+  it('hwpx is an OCF package with an uncompressed mimetype first and BinData pictures', async () => {
+    const bytes = (await runExport(input('hwpx'))).bytes;
+    expect(new TextDecoder().decode(bytes.subarray(30, 38))).toBe('mimetype');
+    const files = unzipSync(bytes);
+    expect(strFromU8(files.mimetype)).toBe('application/hwp+zip');
+    expect(Object.keys(files).filter((f) => f.startsWith('BinData/')).length).toBe(2);
+    const section = strFromU8(files['Contents/section0.xml']);
+    expect(section).toContain('<hp:tbl ');
+    expect(section).toContain('HYPERLINK');
+    expect(section).toContain('日本語のテキスト');
+  });
+
+  it('zip backup contains conversation files, images and the verification report', async () => {
+    const files = unzipSync((await runExport(input('zip'))).bytes);
+    const names = Object.keys(files);
+    const root = names[0].split('/')[0];
+    for (const f of ['conversation.md', 'conversation.html', 'conversation.json', 'verification-report.md', 'verification-report.json', 'images/image-001.png', 'images/image-002.png']) {
+      expect(names).toContain(`${root}/${f}`);
+    }
+    const md = strFromU8(files[`${root}/conversation.md`]);
+    expect(md).toContain('![screenshot](images/image-001.png)');
+    expect(md).toContain('![chart](images/image-002.png)');
+    expect(md).toContain(`![old](${IMG_MISSING})`);
+    const report = strFromU8(files[`${root}/verification-report.md`]);
+    expect(report).toMatch(/이미지 1\/3개를 가져오지 못했습니다/);
+  });
+
+  it('json keeps the full conversation including thinking and branches', async () => {
+    const data = JSON.parse(new TextDecoder().decode((await runExport(input('json'))).bytes));
+    expect(data.schema).toBe('lucian.conversation/v1');
+    expect(data.conversation.messages[1].contents[0].type).toBe('thinking');
+    expect(data.conversation.otherBranchMessages.length).toBe(1);
+  });
+});

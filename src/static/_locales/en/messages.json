@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Lucian AI Chat Exporter"
+  },
+  "appDesc": {
+    "message": "One-click handoff of ChatGPT, Claude, Gemini and Grok chats to another AI, and faithful export to PDF, Markdown, Word, HWPX."
+  }
+}

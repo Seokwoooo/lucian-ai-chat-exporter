@@ -1,0 +1,53 @@
+{
+  "env": {
+    "cpu": "Apple M2 Pro",
+    "cores": 12,
+    "ramGB": 16,
+    "platform": "darwin 27.0.0",
+    "node": "v26.5.0",
+    "v8": "14.6.202.34-node.24",
+    "date": "2026-10-16T09:05:22.069Z"
+  },
+  "results": [
+    {
+      "targetTokens": 100000,
+      "measuredSourceTokens": 100114,
+      "messages": 381,
+      "chars": 285341,
+      "cold": {
+        "totalMs": 105,
+        "normalizeMs": 11,
+        "dedupeMs": 36,
+        "scoreMs": 45,
+        "renderMs": 13
+      },
+      "warm": {
+        "totalMs": 46,
+        "cacheHits": 2442,
+        "cacheMisses": 1
+      },
+      "outputTokens": 15274,
+      "heapDeltaMB": 7
+    },
+    {
+      "targetTokens": 1000000,
+      "measuredSourceTokens": 1000613,
+      "messages": 3795,
+      "chars": 2864992,
+      "cold": {
+        "totalMs": 863,
+        "normalizeMs": 71,
+        "dedupeMs": 249,
+        "scoreMs": 540,
+        "renderMs": 1
+      },
+      "warm": {
+        "totalMs": 728,
+        "cacheHits": 24639,
+        "cacheMisses": 1
+      },
+      "outputTokens": 37192,
+      "heapDeltaMB": 43
+    }
+  ]
+}
