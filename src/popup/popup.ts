@@ -7,6 +7,7 @@ import { jobStorageKey } from '../shared/messages';
 import { SITES, detectSite, extractConversationId } from '../shared/sites';
 import type { ExportFormat, JobKind, JobState, VerificationCheck } from '../shared/types';
 import { checkText } from '../export/report';
+import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
 
 const locale: Locale = detectLocale(chrome.i18n?.getUILanguage?.() ?? navigator.language);
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -114,6 +115,10 @@ async function init(): Promise<void> {
   tabId = tab?.id ?? null;
   const url = tab?.url ?? '';
   const site = detectSite(url);
+  const style = document.createElement('style');
+  style.textContent = HANDOFF_VISUAL_CSS;
+  document.head.appendChild(style);
+  $('handoffVisual').innerHTML = handoffVisualHtml(site, (s) => `providers/${s}.svg`, locale, 'auto');
   if (!site) {
     showNotice(t(locale, 'site.unsupported.title'), t(locale, 'site.unsupported.desc'), true);
     setEnabled(false);
@@ -196,7 +201,8 @@ function progressText(job: JobState): string {
   if (!p) return '';
   if (p.label === 'pages' && p.done) return t(locale, 'progress.pages', { done: p.done });
   if (p.label === 'messages' && p.done) return t(locale, 'progress.messages', { done: p.done.toLocaleString() });
-  if (p.label === 'assets' && p.total) return t(locale, 'progress.assets', { done: p.done ?? 0, total: p.total });
+  if (p.label === 'assets' && p.total) return `${t(locale, 'progress.assets', { done: p.done ?? 0, total: p.total })} ${t(locale, 'progress.percent', { n: Math.floor(((p.done ?? 0) / p.total) * 100) })}`;
+  if (p.label === 'percent' && p.total) return t(locale, 'progress.percent', { n: p.done ?? 0 });
   return '';
 }
 

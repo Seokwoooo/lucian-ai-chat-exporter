@@ -53,7 +53,15 @@ const html = (title: string, body: string, head = ''): MockResponse => ({
 });
 
 /** Toolbar shown under a finished ChatGPT answer (2026-10 structure, synthetic). */
-const ACTIONS_CHATGPT = '<div class="mt-1.5 flex turn-action-controls"><div class="flex min-h-5"><button aria-label="Copy">c</button><button aria-label="More actions">m</button></div></div>';
+const ICON_BTN = (label: string, d: string) =>
+  `<button aria-label="${label}" style="width:32px;height:32px;border:0;border-radius:8px;background:none;color:#5d5d5d;display:inline-flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg></button>`;
+const ACTIONS_CHATGPT =
+  '<div class="mt-1.5 flex turn-action-controls"><div class="flex min-h-5" style="display:flex;align-items:center;gap:2px">' +
+  ICON_BTN('Copy', 'M8 8h11v11H8zM5 16V5h11') +
+  ICON_BTN('Good response', 'M7 10v10M7 10l4-7a2 2 0 0 1 3 2l-1 5h6l-2 9H7') +
+  ICON_BTN('Regenerate', 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5') +
+  ICON_BTN('More actions', 'M6 12h.01M12 12h.01M18 12h.01') +
+  '</div></div>';
 
 /** Records which endpoints the extension called, for assertions. */
 export const calls: string[] = [];

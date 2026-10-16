@@ -24,6 +24,8 @@ npm run lint         # eslint
 npm test             # vitest unit tests (adapters, handoff accuracy, exporters)
 npm run test:e2e     # builds, then drives Chrome for Testing with the extension against mocked sites
 npm run bench        # handoff performance on ~100k / ~1M token synthetic conversations
+npm run lab          # compression lab on synthetic conversations (algorithms × budgets, retention metrics)
+npm run lab:file -- <in.json> <out.json>  # same lab on a local file of ChatGPT payloads (keep it outside the repo)
 npm run package      # build + release/lucian-ai-chat-exporter-v<version>.zip
 npm run check        # typecheck + lint + test + build
 ```
@@ -50,7 +52,13 @@ popup            src/popup/*                two cards: handoff button, export fo
 - Exporters live in `src/export/` and share one Markdown intermediate representation
   (`md-parse.ts` = marked + math tokenizers). Heavy modules (docx, hwpx, katex) are dynamic imports.
 - `src/export/verify.ts` turns every gap (missing messages, images, attachments, unrendered math)
-  into warn/fail checks. Never report a partial result as a clean success.
+  into warn/fail checks. Never report a partial result as a clean success. XML above 4 MB is checked with
+  the streaming `scanXmlWellFormed` instead of `DOMParser`.
+- Progress: builders and the handoff engine report fractions; offscreen turns them into whole
+  percents (`offscreen-progress`), shown as "처리 중… (n% 완료)" in the popup and the page panel.
+- `src/shared/handoff-visual.ts` draws the "this AI → other AI" illustration above the handoff
+  button (popup + page panel). Logos live in `src/static/providers/` (web-accessible on the five
+  AI origins only); they are trademarks used only to name the services.
 - Storage: IndexedDB `lucianDB` (conversations 7-day TTL, asset cache LRU 500, handoff cache).
   Never persist auth tokens or cookies.
 
@@ -75,5 +83,9 @@ popup            src/popup/*                two cards: handoff button, export fo
   (JSON/ZIP only); every such decision is reported in verification.
 - The in-page button must not disturb the site: Shadow DOM only, append-only into the toolbar,
   no reading of the conversation until the user clicks. Toolbar selectors live in `actionBars()`.
+- `scripts/compression-lab/` compares selection algorithms; results are in `docs/compression-lab.md`.
+  The engine's `DEFAULT_SELECTION` (coverage) and `DEFAULT_LAYOUT` were chosen there — re-run the
+  lab before changing them. Real conversations used for it must never enter the repo (only
+  aggregate numbers).
 - `scripts/build.mjs` strips the `new Function` branch from docx's bundled JSZip polyfill; CI fails
   if `eval`/`new Function` appears in `dist/`.

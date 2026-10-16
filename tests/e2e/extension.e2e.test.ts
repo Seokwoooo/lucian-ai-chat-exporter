@@ -88,10 +88,14 @@ async function tabIdFor(url: string): Promise<number> {
   }, url);
 }
 
+/** Progress values seen while polling (label "percent" = processing percentage). */
+const seenProgress: Array<NonNullable<JobState['progress']> & { phase: string }> = [];
+
 async function waitJob(tabId: number, predicate: (j: JobState) => boolean, timeoutMs = 60_000): Promise<JobState> {
   const t0 = Date.now();
   for (;;) {
     const job = (await popup.evaluate(async (id) => (await chrome.storage.session.get(`job:${id}`))[`job:${id}`], tabId)) as JobState | undefined;
+    if (job?.progress) seenProgress.push({ ...job.progress, phase: job.phase });
     if (job && predicate(job)) return job;
     if (Date.now() - t0 > timeoutMs) throw new Error(`timeout waiting for job: ${JSON.stringify(job)}`);
     await new Promise((r) => setTimeout(r, 150));
@@ -214,12 +218,21 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
     const expected = { chatgpt: 2, claude: 1, gemini: 1, grok: 1 } as const;
     for (const site of ['chatgpt', 'claude', 'gemini', 'grok'] as const) {
       const page = await browser.newPage();
+      if (site === 'chatgpt') await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
       await page.goto(PAGES[site], { waitUntil: 'load' });
       await page.bringToFront();
       await page.waitForSelector('[data-lucian-action]', { timeout: 10_000 });
       await new Promise((r) => setTimeout(r, 400));
       expect(await page.$$eval('[data-lucian-action]', (els) => els.length), site).toBe(expected[site]);
       const trigger = await page.waitForSelector('[data-lucian-action] >>> button');
+      if (site === 'chatgpt') {
+        await new Promise((r) => setTimeout(r, 600));
+        const b = (await page.$eval('[data-lucian-action]', (h) => {
+          const r = h.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }))!;
+        await page.screenshot({ path: join(SHOTS, 'page-button.png'), clip: { x: Math.max(0, b.x - 150), y: Math.max(0, b.y - 12), width: b.width + 170, height: b.height + 24 } });
+      }
       await trigger!.click();
       const primary = await page.waitForSelector('[data-lucian-panel] >>> .primary', { visible: true });
       if (site === 'chatgpt') {
@@ -359,9 +372,14 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
     expect(warm.job.phase).toBe('done');
     record('handoff (warm cache)', warm);
     for (const format of ['md', 'html', 'docx', 'hwpx'] as const) {
+      seenProgress.length = 0;
       const r = await runAndWait(tabId, `.fmt[data-format="${format}"]`, 300_000);
       expect(r.job.phase, `${format}: ${JSON.stringify(r.job.error)}`).toBe('done');
-      record(format, r);
+      const row = record(format, r);
+      const pcts = seenProgress.filter((p) => p.phase === 'processing' && p.label === 'percent').map((p) => p.done ?? 0);
+      Object.assign(row, { percentsSeen: [...new Set(pcts)].length });
+      // Long builds report a processing percentage (popup / panel show "(n% 완료)").
+      if (format === 'docx' || format === 'hwpx') expect(pcts.some((p) => p > 0 && p < 100), `${format} percent updates`).toBe(true);
     }
     const result = { chrome: CHROME?.match(/mac_arm-([\d.]+)/)?.[1] ?? CHROME, date: new Date().toISOString(), rows };
     writeFileSync(join(OUT, 'perf-1m.json'), JSON.stringify(result, null, 2));

@@ -176,6 +176,107 @@ function parseOk(parse: XmlParser, xml: string): Document | null {
   return doc.getElementsByTagName('parsererror').length ? null : doc;
 }
 
+/**
+ * DOMParser is the strictest well-formedness check but builds a whole DOM: for the ~25 MB
+ * document.xml of a 1M-token conversation that took 4.5 s in Chrome as one blocking step. Above
+ * this size a streaming scan is used instead (and reports progress).
+ */
+export const DOM_PARSE_LIMIT = 4 * 1024 * 1024;
+
+const BAD_ENTITY = /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/;
+const NAME = /^[A-Za-z_][\w.:-]*/;
+const ATTRS = /^(?:\s+[A-Za-z_][\w.:-]*\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*$/;
+
+/**
+ * Streaming XML well-formedness scan: one root element, every start tag closed in order, valid
+ * attribute syntax (no '<' in values), entity references well-formed, no text outside the root.
+ * Returns null when well-formed, otherwise a short reason.
+ */
+export async function scanXmlWellFormed(xml: string, onProgress?: (fraction: number) => void): Promise<string | null> {
+  const n = xml.length;
+  const stack: string[] = [];
+  let roots = 0;
+  let i = 0;
+  let nextReport = 1 << 20;
+  while (i < n) {
+    if (i >= nextReport) {
+      nextReport = i + (1 << 20);
+      onProgress?.(i / n);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const lt = xml.indexOf('<', i);
+    const text = lt < 0 ? xml.slice(i) : xml.slice(i, lt);
+    if (text) {
+      if (text.includes('&') && BAD_ENTITY.test(text)) return `invalid entity near offset ${i}`;
+      if (!stack.length && text.trim()) return `text outside the root element at offset ${i}`;
+    }
+    if (lt < 0) break;
+    if (xml.startsWith('<?', lt)) {
+      const e = xml.indexOf('?>', lt + 2);
+      if (e < 0) return 'unterminated processing instruction';
+      i = e + 2;
+      continue;
+    }
+    if (xml.startsWith('<!--', lt)) {
+      const e = xml.indexOf('-->', lt + 4);
+      if (e < 0) return 'unterminated comment';
+      i = e + 3;
+      continue;
+    }
+    if (xml.startsWith('<![CDATA[', lt)) {
+      if (!stack.length) return 'CDATA outside the root element';
+      const e = xml.indexOf(']]>', lt + 9);
+      if (e < 0) return 'unterminated CDATA section';
+      i = e + 3;
+      continue;
+    }
+    if (xml.startsWith('<!', lt)) {
+      const e = xml.indexOf('>', lt + 2);
+      if (e < 0 || roots) return 'misplaced declaration';
+      i = e + 1;
+      continue;
+    }
+    // End of the tag: the first '>' outside quoted attribute values.
+    let gt = lt + 1;
+    for (let q = 0; gt < n; gt++) {
+      const c = xml.charCodeAt(gt);
+      if (q) {
+        if (c === q) q = 0;
+      } else if (c === 34 || c === 39) q = c;
+      else if (c === 62) break;
+    }
+    if (gt >= n) return `unterminated tag at offset ${lt}`;
+    const tag = xml.slice(lt + 1, gt);
+    if (tag.startsWith('/')) {
+      const name = tag.slice(1).trim();
+      const open = stack.pop();
+      if (open !== name) return `</${name}> does not close <${open ?? '(none)'}>`;
+    } else {
+      const selfClosing = tag.endsWith('/');
+      const body = selfClosing ? tag.slice(0, -1) : tag;
+      const name = NAME.exec(body)?.[0];
+      if (!name) return `invalid tag at offset ${lt}`;
+      const attrs = body.slice(name.length);
+      if (attrs && (!ATTRS.test(attrs) || (attrs.includes('&') && BAD_ENTITY.test(attrs)))) return `invalid attributes in <${name}>`;
+      if (!stack.length) {
+        roots++;
+        if (roots > 1) return 'more than one root element';
+      }
+      if (!selfClosing) stack.push(name);
+    }
+    i = gt + 1;
+  }
+  if (stack.length) return `<${stack[stack.length - 1]}> is not closed`;
+  if (roots !== 1) return 'no root element';
+  onProgress?.(1);
+  return null;
+}
+
+async function xmlWellFormed(parse: XmlParser, xml: string, onProgress?: (fraction: number) => void): Promise<boolean> {
+  if (xml.length <= DOM_PARSE_LIMIT) return parseOk(parse, xml) != null;
+  return (await scanXmlWellFormed(xml, onProgress)) == null;
+}
+
 function headersInOrder(text: string, headers: string[]): OutputCheck {
   let pos = 0;
   for (const h of headers) {
@@ -206,14 +307,20 @@ export function verifyHtmlOutput(html: string, expectedMessages: number, parseHt
   return n === expectedMessages ? { ok: true } : { ok: false, detail: `rendered messages ${n} ≠ ${expectedMessages}` };
 }
 
-export function verifyDocxOutput(bytes: Uint8Array, expectedMessages: number, expectedImages: number, parse: XmlParser): OutputCheck {
+export async function verifyDocxOutput(
+  bytes: Uint8Array,
+  expectedMessages: number,
+  expectedImages: number,
+  parse: XmlParser,
+  onProgress?: (fraction: number) => void,
+): Promise<OutputCheck> {
   try {
     const files = unzipSync(bytes);
     const xml = files['word/document.xml'];
     if (!xml) return { ok: false, detail: 'word/document.xml missing' };
     if (!files['[Content_Types].xml']) return { ok: false, detail: '[Content_Types].xml missing' };
     const text = strFromU8(xml);
-    if (!parseOk(parse, text)) return { ok: false, detail: 'document.xml is not well-formed' };
+    if (!(await xmlWellFormed(parse, text, onProgress))) return { ok: false, detail: 'document.xml is not well-formed' };
     const headers = (text.match(/<w:pStyle w:val="LucianMessage"\/>/g) ?? []).length;
     if (headers !== expectedMessages) return { ok: false, detail: `message headers ${headers} ≠ ${expectedMessages}` };
     const drawings = (text.match(/<w:drawing>/g) ?? []).length;
@@ -224,7 +331,13 @@ export function verifyDocxOutput(bytes: Uint8Array, expectedMessages: number, ex
   }
 }
 
-export function verifyHwpxOutput(bytes: Uint8Array, headers: string[], expectedImages: number, parse: XmlParser): OutputCheck {
+export async function verifyHwpxOutput(
+  bytes: Uint8Array,
+  headers: string[],
+  expectedImages: number,
+  parse: XmlParser,
+  onProgress?: (fraction: number) => void,
+): Promise<OutputCheck> {
   try {
     // The first local file header must be the uncompressed `mimetype` entry.
     const name = strFromU8(bytes.subarray(30, 38));
@@ -234,7 +347,7 @@ export function verifyHwpxOutput(bytes: Uint8Array, headers: string[], expectedI
     for (const part of ['version.xml', 'Contents/content.hpf', 'Contents/header.xml', 'Contents/section0.xml', 'META-INF/container.xml']) {
       if (!files[part]) return { ok: false, detail: `${part} missing` };
       if (part.endsWith('.xml') || part.endsWith('.hpf')) {
-        if (!parseOk(parse, strFromU8(files[part]))) return { ok: false, detail: `${part} is not well-formed` };
+        if (!(await xmlWellFormed(parse, strFromU8(files[part]), part === 'Contents/section0.xml' ? onProgress : undefined))) return { ok: false, detail: `${part} is not well-formed` };
       }
     }
     const hpf = strFromU8(files['Contents/content.hpf']);

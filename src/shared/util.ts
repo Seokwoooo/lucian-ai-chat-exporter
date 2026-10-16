@@ -267,3 +267,11 @@ export function hostLabel(url: string): string {
     return 'source';
   }
 }
+
+/** Progress callback: fraction in [0, 1] and an optional stage name. */
+export type ProgressFn = (fraction: number, stage?: string) => void;
+
+/** Lets queued messages (progress updates) go out during long synchronous work. */
+export function yieldToLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}

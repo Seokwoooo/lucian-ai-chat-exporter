@@ -6,6 +6,7 @@ import { renderMathMl } from '../../src/export/math';
 import { conversationToMarkdown } from '../../src/export/markdown';
 import { runExport, type PipelineInput } from '../../src/export/pipeline';
 import { markdownToTxt } from '../../src/export/txt';
+import { scanXmlWellFormed } from '../../src/export/verify';
 import type { AssetStatus } from '../../src/shared/messages';
 import type { ExportFormat } from '../../src/shared/types';
 import { IMG_A, IMG_B, IMG_MISSING, sampleConversation, sampleImages } from '../fixtures/sample-conversation';
@@ -168,5 +169,39 @@ describe('long tool output', () => {
     const json = await runExport(withTool('json'));
     expect(strFromU8(json.bytes)).toContain('line 399 of a fetched page');
     expect(json.verification.checks.some((c) => c.code === 'tools.clipped')).toBe(false);
+  });
+});
+
+describe('streaming XML well-formedness scan (large documents)', () => {
+  it('accepts well-formed XML and agrees with DOMParser on broken documents', async () => {
+    const good = [
+      '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="x"><w:body><w:p><w:r><w:t xml:space="preserve">a &amp; b &lt;c&gt; &#44032;</w:t></w:r></w:p><w:p/></w:body></w:document>',
+      '<root a="1 > 0" b=\'x\'><!-- c --><![CDATA[<raw & text>]]><x/></root>',
+    ];
+    for (const xml of good) expect(await scanXmlWellFormed(xml)).toBeNull();
+    // happy-dom's XML parser has no CDATA support, so only the first sample is cross-checked.
+    expect(parser.parseFromString(good[0], 'application/xml').getElementsByTagName('parsererror').length).toBe(0);
+    const bad = [
+      '<a><b></a></b>',
+      '<a><b></b>',
+      '<a>1 & 2</a>',
+      '<a></a><b></b>',
+      '<a x="<"></a>',
+      '<a x=1></a>',
+      'text<a></a>',
+      '<a><b',
+    ];
+    for (const xml of bad) expect(await scanXmlWellFormed(xml), xml).not.toBeNull();
+  });
+
+  it('checks a real generated DOCX document.xml and reports progress on large input', async () => {
+    const docx = await runExport(input('docx'));
+    const xml = strFromU8(unzipSync(docx.bytes)['word/document.xml']);
+    expect(await scanXmlWellFormed(xml)).toBeNull();
+    const big = `<r>${'<p a="1">x &amp; y</p>'.repeat(200_000)}</r>`;
+    const seen: number[] = [];
+    expect(await scanXmlWellFormed(big, (f) => seen.push(f))).toBeNull();
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.at(-1)).toBe(1);
   });
 });

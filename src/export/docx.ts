@@ -28,6 +28,7 @@ import { formatDateTime } from '../shared/util';
 import { EMBEDDABLE, fitSize, type ImageStore } from './images';
 import { messageHeaderText, toolDocText } from './markdown';
 import { lex, type Token, type Tokens } from './md-parse';
+import { yieldToLoop, type ProgressFn } from '../shared/util';
 
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export const MESSAGE_STYLE = 'LucianMessage';
@@ -380,7 +381,13 @@ const numberLevels = Array.from({ length: 9 }, (_, i) => ({
   style: { paragraph: { indent: { left: 360 * (i + 1), hanging: 300 } } },
 }));
 
-export async function buildDocx(conv: Conversation, opts: { locale: Locale; images: ImageStore; exportedAt?: number }): Promise<{ bytes: Uint8Array; stats: DocxStats }> {
+/** Measured on a 1M-token conversation: building paragraphs is about this share of buildDocx. */
+export const DOCX_BLOCKS_SHARE = 0.3;
+
+export async function buildDocx(
+  conv: Conversation,
+  opts: { locale: Locale; images: ImageStore; exportedAt?: number; onProgress?: ProgressFn },
+): Promise<{ bytes: Uint8Array; stats: DocxStats }> {
   const exportedAt = opts.exportedAt ?? Date.now();
   const stats: DocxStats = { messages: 0, tables: 0, codeBlocks: 0, math: 0, images: 0, imagesEmbedded: 0, imagesMissing: 0 };
   const ctx: Ctx = { locale: opts.locale, images: opts.images, stats, listInstance: 0 };
@@ -400,7 +407,17 @@ export async function buildDocx(conv: Conversation, opts: { locale: Locale; imag
       children: [new ExternalHyperlink({ link: conv.fromUrl, children: [new TextRun({ text: conv.fromUrl, style: 'Hyperlink', size: 18 })] })],
     }),
   ];
-  for (const m of conv.messages) children.push(...messageBlocks(conv, m, ctx));
+  // Building paragraphs is reported per message; packing (XML + ZIP inside the docx library) has
+  // no progress of its own and is the remaining share.
+  const N = conv.messages.length;
+  for (let i = 0; i < N; i++) {
+    children.push(...messageBlocks(conv, conv.messages[i], ctx));
+    if (opts.onProgress && i % 50 === 49) {
+      opts.onProgress((DOCX_BLOCKS_SHARE * (i + 1)) / N, 'build');
+      await yieldToLoop();
+    }
+  }
+  opts.onProgress?.(DOCX_BLOCKS_SHARE, 'pack');
 
   const doc = new Document({
     creator: 'Lucian AI Chat Exporter',
@@ -446,5 +463,6 @@ export async function buildDocx(conv: Conversation, opts: { locale: Locale; imag
     ],
   });
   const buf = await Packer.toArrayBuffer(doc);
+  opts.onProgress?.(1, 'pack');
   return { bytes: new Uint8Array(buf), stats };
 }

@@ -7,6 +7,7 @@
 import { checkText } from '../export/report';
 import { detectLocale, formatBytes, t, type Locale, type MessageKey } from '../shared/i18n';
 import type { ExportFormat, JobKind, JobState } from '../shared/types';
+import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
 import type { SiteAdapter } from './adapters/types';
 
 const HOST_ATTR = 'data-lucian-action';
@@ -14,8 +15,9 @@ const PRIMARY: ExportFormat[] = ['pdf', 'md', 'docx'];
 const MORE: ExportFormat[] = ['hwpx', 'html', 'txt', 'json', 'zip'];
 const TERMINAL = ['done', 'error', 'print'];
 
+// The mark is drawn with a violet → cyan gradient (the same family as the illustration's arc).
 const LOGO =
-  '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.25" y="3.25" width="17.5" height="17.5" rx="5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.6 8v8.2h5.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset=".55" stop-color="#4f7cff"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><rect x="3.25" y="3.25" width="17.5" height="17.5" rx="5" fill="none" stroke="url(#lg)" stroke-width="1.8"/><path d="M9.6 8v8.2h5.2" fill="none" stroke="url(#lg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON = {
   spin: '<svg viewBox="0 0 24 24" class="spin" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="3"/><path d="M21 12a9 9 0 0 0-9-9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>',
   ok: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="m7.5 12.5 3 3 6-6.5" fill="none" stroke="var(--bg)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -25,18 +27,33 @@ const ICON = {
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
+// Toolbar button: the site's own icons are flat, so Lucian's is marked by a soft neon ring
+// (rotating violet/cyan gradient, low opacity) and a slow "breathing" glow — visible, not loud.
 const BUTTON_CSS = `
 :host { all: initial; display: inline-flex; vertical-align: middle; color: inherit; }
 button {
-  all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
-  width: var(--size, 32px); height: var(--size, 32px); border-radius: 8px; cursor: pointer;
-  color: inherit; opacity: .78; transition: background-color .15s, opacity .15s;
+  all: unset; box-sizing: border-box; position: relative; isolation: isolate; display: inline-flex; align-items: center; justify-content: center;
+  width: var(--size, 32px); height: var(--size, 32px); border-radius: 10px; cursor: pointer; color: inherit;
+  transition: transform .18s ease;
 }
-button:hover, button[aria-expanded="true"] { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
-button:focus-visible { outline: 2px solid #6366f1; outline-offset: 1px; }
-svg { width: 18px; height: 18px; }
-.spin { animation: r 0.9s linear infinite; }
-@keyframes r { to { transform: rotate(360deg); } }
+.halo { position: absolute; inset: 2px; z-index: -2; border-radius: 10px; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(124, 92, 255, .42), rgba(34, 211, 238, .16) 65%, transparent);
+  filter: blur(3px); opacity: .5; animation: breathe 3.6s ease-in-out infinite; }
+.ring { position: absolute; inset: 3px; z-index: -1; border-radius: 9px; padding: 1.3px; overflow: hidden; pointer-events: none; opacity: .62;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); transition: opacity .18s ease; }
+.ring::before { content: ''; position: absolute; inset: -60%; background: conic-gradient(#7c5cff, #22d3ee, #a855f7, #4f7cff, #7c5cff); animation: spin 7s linear infinite; }
+button:hover, button[aria-expanded="true"] { transform: scale(1.06); }
+button:hover .ring, button[aria-expanded="true"] .ring { opacity: 1; }
+button:hover .halo, button[aria-expanded="true"] .halo { opacity: .95; animation-duration: 2.2s; }
+button:active { transform: scale(.96); }
+button[data-busy="true"] .ring::before { animation-duration: 1.6s; }
+button:focus-visible { outline: 2px solid #7c5cff; outline-offset: 1px; }
+svg { width: 18px; height: 18px; filter: drop-shadow(0 0 2.5px rgba(124, 92, 255, .55)); }
+.spin { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes breathe { 0%, 100% { opacity: .38; transform: scale(.94); } 50% { opacity: .72; transform: scale(1.04); } }
+@media (prefers-reduced-motion: reduce) { .halo, .ring::before, .spin { animation: none; } button { transition: none; } }
 `;
 
 const PANEL_CSS = `
@@ -94,6 +111,8 @@ button:disabled { opacity: .45; cursor: default; }
 .status .sub { color: var(--muted); font-size: 12px; }
 .status ul { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
 .status .actions { margin-top: 6px; display: flex; gap: 6px; }
+.status .bar { margin-top: 7px; height: 4px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; }
+.status .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7c5cff, #22d3ee); transition: width .25s ease; }
 .link { all: unset; color: var(--text); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .spin { animation: r 0.9s linear infinite; }
 @keyframes r { to { transform: rotate(360deg); } }
@@ -103,6 +122,7 @@ button:disabled { opacity: .45; cursor: default; }
   border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0,0,0,.18); cursor: pointer;
 }
 .toast .ic svg { width: 18px; height: 18px; display: block; }
+${HANDOFF_VISUAL_CSS}
 `;
 
 function isDarkPage(): boolean {
@@ -164,6 +184,7 @@ export function initPageUi(adapter: SiteAdapter): void {
       <section class="card">
         <h3>${escapeText(tr('handoff.title'))}</h3>
         <p>${escapeText(tr('handoff.desc'))}</p>
+        ${handoffVisualHtml(adapter.site, (s) => chrome.runtime.getURL(`providers/${s}.svg`), locale, 'light')}
         <button type="button" class="primary" data-act="handoff">${escapeText(tr('handoff.button'))}</button>
       </section>
       <section class="card">
@@ -213,7 +234,9 @@ export function initPageUi(adapter: SiteAdapter): void {
       title = tr(key, { format: fmtName });
       const p = job.progress;
       if (p?.label === 'messages' && p.done) sub = tr('progress.messages', { done: p.done.toLocaleString() });
-      else if (p?.label === 'assets' && p.total) sub = tr('progress.assets', { done: p.done ?? 0, total: p.total });
+      else if (p?.label === 'assets' && p.total) sub = `${tr('progress.assets', { done: p.done ?? 0, total: p.total })} ${tr('progress.percent', { n: Math.floor(((p.done ?? 0) / p.total) * 100) })}`;
+      else if (p?.label === 'percent' && p.total) sub = tr('progress.percent', { n: p.done ?? 0 });
+      if (p?.total && p.done != null) extra += `<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round((p.done / p.total) * 100)}"><i style="width:${Math.max(3, Math.round((p.done / p.total) * 100))}%"></i></div>`;
     } else if (job.phase === 'error') {
       box.dataset.level = 'error';
       icon = ICON.err;
@@ -302,7 +325,8 @@ export function initPageUi(adapter: SiteAdapter): void {
 
   const setBusy = (busy: boolean) => {
     for (const b of triggers) {
-      b.innerHTML = busy ? ICON.spin : LOGO;
+      const icon = b.querySelector('.icon');
+      if (icon) icon.innerHTML = busy ? ICON.spin : LOGO;
       b.dataset.busy = String(busy);
     }
   };
@@ -422,7 +446,7 @@ export function initPageUi(adapter: SiteAdapter): void {
     style.textContent = BUTTON_CSS;
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.innerHTML = job && !TERMINAL.includes(job.phase) ? ICON.spin : LOGO;
+    btn.innerHTML = `<span class="halo"></span><span class="ring"></span><span class="icon" style="display:inline-flex">${job && !TERMINAL.includes(job.phase) ? ICON.spin : LOGO}</span>`;
     btn.title = tr('page.button');
     btn.setAttribute('aria-label', tr('page.button'));
     btn.setAttribute('aria-haspopup', 'dialog');

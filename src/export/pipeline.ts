@@ -5,7 +5,7 @@ import { strToU8, zipSync, type Zippable } from 'fflate';
 import type { Locale } from '../shared/i18n';
 import type { AssetStatus } from '../shared/messages';
 import type { Conversation, ExportFormat, Verification } from '../shared/types';
-import { bytesToBase64, formatDate, mimeToExt, safeFilename } from '../shared/util';
+import { bytesToBase64, formatDate, mimeToExt, safeFilename, yieldToLoop, type ProgressFn } from '../shared/util';
 import type { ImageStore, StoredImage } from './images';
 import { conversationToMarkdown } from './markdown';
 import { buildVerification, verifyHtmlOutput, verifyJsonOutput, verifyTextOutput, verifyZipOutput, verifyDocxOutput, verifyHwpxOutput, type FormatStats, type OutputCheck } from './verify';
@@ -47,6 +47,8 @@ export interface PipelineInput {
   parseHtml: (s: string) => Document;
   exportedAt?: number;
   appVersion?: string;
+  /** Overall progress of build + verification, 0…1. */
+  onProgress?: ProgressFn;
 }
 
 export interface PipelineOutput {
@@ -54,6 +56,7 @@ export interface PipelineOutput {
   mime: string;
   filename: string;
   verification: Verification;
+  stageMs?: { build: number; verify: number };
 }
 
 export function exportFilename(conv: Conversation, ext: string): string {
@@ -78,32 +81,43 @@ export function exportJsonText(conv: Conversation, exportedAt: number, appVersio
   );
 }
 
+/**
+ * Share of the work that is building (the rest is verifying the generated file), measured on a
+ * 1M-token conversation in Chrome. Used only to turn stage progress into one percentage.
+ */
+const BUILD_SHARE: Record<Exclude<ExportFormat, 'pdf'>, number> = { md: 0.75, txt: 0.75, json: 0.6, html: 0.8, docx: 0.88, hwpx: 0.77, zip: 0.9 };
+
 export async function runExport(input: PipelineInput): Promise<PipelineOutput> {
   const { conv, format, locale } = input;
   const exportedAt = input.exportedAt ?? Date.now();
   const appVersion = input.appVersion ?? '1.0.0';
   const enc = new TextEncoder();
+  const share = BUILD_SHARE[format];
+  const report = (f: number, stage: string) => input.onProgress?.(Math.min(1, Math.max(0, f)), stage);
+  const building: ProgressFn = (f, stage) => report(share * f, stage ?? 'build');
   let bytes: Uint8Array;
   let stats: FormatStats = {};
-  let output: OutputCheck;
+  let verify: (onProgress: (f: number) => void) => OutputCheck | Promise<OutputCheck>;
+  const t0 = performance.now();
+  report(0, 'build');
 
   switch (format) {
     case 'md': {
       const md = conversationToMarkdown(conv, { locale }, exportedAt);
       bytes = enc.encode(md.text);
-      output = verifyTextOutput(bytes, md.headers);
+      verify = () => verifyTextOutput(bytes, md.headers);
       break;
     }
     case 'txt': {
       const { conversationToTxt } = await import('./txt');
       const txt = conversationToTxt(conv, locale, exportedAt);
       bytes = enc.encode(txt.text);
-      output = verifyTextOutput(bytes, txt.headers);
+      verify = () => verifyTextOutput(bytes, txt.headers);
       break;
     }
     case 'json': {
       bytes = enc.encode(exportJsonText(conv, exportedAt, appVersion));
-      output = verifyJsonOutput(bytes, conv.messages.length);
+      verify = () => verifyJsonOutput(bytes, conv.messages.length);
       break;
     }
     case 'html': {
@@ -116,39 +130,47 @@ export async function runExport(input: PipelineInput): Promise<PipelineOutput> {
       const html = wrapHtmlDocument(conv.title || conv.siteName, body.html, locale, 'file');
       bytes = enc.encode(html);
       stats = body.stats;
-      output = verifyHtmlOutput(html, conv.messages.length, input.parseHtml);
+      verify = () => verifyHtmlOutput(html, conv.messages.length, input.parseHtml);
       break;
     }
     case 'docx': {
       const { buildDocx } = await import('./docx');
-      const r = await buildDocx(conv, { locale, images: input.embeddable, exportedAt });
+      const r = await buildDocx(conv, { locale, images: input.embeddable, exportedAt, onProgress: building });
       bytes = r.bytes;
       stats = r.stats;
-      output = verifyDocxOutput(bytes, conv.messages.length, r.stats.imagesEmbedded, input.parseXml);
+      verify = (p) => verifyDocxOutput(bytes, conv.messages.length, r.stats.imagesEmbedded, input.parseXml, p);
       break;
     }
     case 'hwpx': {
       const [{ buildHwpx }, { messageHeaderText }] = await Promise.all([import('./hwpx'), import('./markdown')]);
-      const r = await buildHwpx(conv, { locale, images: input.embeddable, exportedAt, appVersion });
+      const r = await buildHwpx(conv, { locale, images: input.embeddable, exportedAt, appVersion, onProgress: building });
       bytes = r.bytes;
       stats = r.stats;
-      output = verifyHwpxOutput(bytes, conv.messages.map((m) => messageHeaderText(conv, m, locale)), r.stats.imagesEmbedded, input.parseXml);
+      verify = (p) => verifyHwpxOutput(bytes, conv.messages.map((m) => messageHeaderText(conv, m, locale)), r.stats.imagesEmbedded, input.parseXml, p);
       break;
     }
     case 'zip': {
-      const r = await buildZip(input, exportedAt, appVersion);
+      const r = await buildZip(input, exportedAt, appVersion, building);
       bytes = r.bytes;
       stats = r.stats;
-      output = verifyZipOutput(bytes, r.required);
+      verify = () => verifyZipOutput(bytes, r.required);
       break;
     }
   }
 
+  const buildMs = performance.now() - t0;
+  report(share, 'verify');
+  // Let the progress message go out before the (synchronous) verification starts.
+  await yieldToLoop();
+  const t1 = performance.now();
+  const output = await verify((f) => report(share + (1 - share) * f, 'verify'));
+  const verifyMs = performance.now() - t1;
+  report(1, 'verify');
   const verification = buildVerification(conv, format, { assets: input.assetStatus, stats, output, formatLabel: FORMAT_LABEL[format] });
-  return { bytes, mime: FORMAT_MIME[format], filename: exportFilename(conv, format), verification };
+  return { bytes, mime: FORMAT_MIME[format], filename: exportFilename(conv, format), verification, stageMs: { build: buildMs, verify: verifyMs } };
 }
 
-async function buildZip(input: PipelineInput, exportedAt: number, appVersion: string) {
+async function buildZip(input: PipelineInput, exportedAt: number, appVersion: string, onProgress?: ProgressFn) {
   const { conv, locale } = input;
   const root = exportFilename(conv, 'zip').replace(/\.zip$/, '');
   const files: Zippable = {};
@@ -189,8 +211,11 @@ async function buildZip(input: PipelineInput, exportedAt: number, appVersion: st
   const totalAttachments = conv.messages.reduce((n, m) => n + m.contents.filter((c) => c.type === 'attachment').length, 0);
   attachmentsMissing = Math.max(attachmentsMissing, totalAttachments - attachmentsSaved);
 
+  onProgress?.(0.1, 'build');
   const md = conversationToMarkdown(conv, { locale, imageHref: (u) => imagePath.get(u), attachmentHref: (k) => attachmentPath.get(k) }, exportedAt);
   files[`${root}/conversation.md`] = strToU8(md.text);
+  onProgress?.(0.25, 'build');
+  await yieldToLoop();
   const { renderConversationBody, wrapHtmlDocument } = await import('./html');
   const body = renderConversationBody(
     conv,
@@ -199,13 +224,17 @@ async function buildZip(input: PipelineInput, exportedAt: number, appVersion: st
   );
   files[`${root}/conversation.html`] = strToU8(wrapHtmlDocument(conv.title || conv.siteName, body.html, locale, 'file'));
   files[`${root}/conversation.json`] = strToU8(exportJsonText(conv, exportedAt, appVersion));
+  onProgress?.(0.6, 'pack');
+  await yieldToLoop();
 
   const stats: FormatStats = { ...body.stats, attachmentsSaved, attachmentsMissing };
   const preVerification = buildVerification(conv, 'zip', { assets: input.assetStatus, stats });
   files[`${root}/verification-report.md`] = strToU8(verificationReportMarkdown(conv, preVerification, locale, { files: listing, exportedAt }));
   files[`${root}/verification-report.json`] = strToU8(JSON.stringify({ verification: preVerification, files: listing, extraction: conv.extraction }, null, 2));
   const required = ['conversation.md', 'conversation.html', 'conversation.json', 'verification-report.md'].map((f) => `${root}/${f}`);
-  return { bytes: zipSync(files, { level: 6 }), stats, required };
+  const bytes = zipSync(files, { level: 6 });
+  onProgress?.(1, 'pack');
+  return { bytes, stats, required };
 }
 
 function findAttachment(conv: Conversation, key: string) {

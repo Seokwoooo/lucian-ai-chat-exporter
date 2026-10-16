@@ -173,3 +173,6 @@ body[data-ready] .more svg { transition: transform .2s ease; }
   * { transition: none !important; }
   .status-icon.spin svg, .progress[data-indeterminate="true"] .progress-bar { animation: none; }
 }
+
+.handoff-visual { min-height: 58px; }
+.handoff-visual .hv { margin: 2px 0 10px; }

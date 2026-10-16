@@ -9,6 +9,7 @@ import type { Conversation, HandoffStats, Role } from '../shared/types';
 import { cleanUrl, estimateTokens, hangulRatio, hostLabel, urlKey } from '../shared/util';
 import { messageBodyMarkdown, replaceOutsideCode } from '../export/markdown';
 import { clusterNearDuplicates, minhash } from './minhash';
+import { conceptsOf, greedyCoverage, type CoverItem } from './coverage';
 import { CODE_ERROR_RE, F, bulletText, classify, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, replacementPairs, stripTracking, topicTokens } from './patterns';
 import { segmentMessage, type Unit } from './segment';
 import { renderHandoff, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
@@ -38,7 +39,53 @@ export interface HandoffOptions {
   now?: number;
   cache?: CacheMap;
   onPhase?: (phase: 'normalize' | 'dedupe' | 'score' | 'render') => void;
+  /** Fraction of the work done (0…1): normalize ≈ 35%, dedupe ≈ 40%, score + select ≈ 20%, render. */
+  onProgress?: (fraction: number) => void;
+  /** Fixed output budget in tokens instead of the default (12% of the source, 8k–32k). Used by the compression lab. */
+  budgetTokens?: number;
+  /** How the remaining budget is filled with earlier context: relevance ranking or concept coverage. */
+  selection?: 'relevance' | 'coverage';
+  /** Budget layout overrides (compression lab). */
+  layout?: Partial<Layout>;
 }
+
+/** How the compressed-mode budget is split. Shares are fractions of the budget. */
+export interface Layout {
+  /** Verbatim recent transcript. */
+  recentShare: number;
+  recentMin: number;
+  /** Per-message token caps in the recent transcript: the last two messages, older ones. */
+  lastMsgCap: number;
+  recentMsgCap: number;
+  /** Latest version of each code block not already in the transcript. */
+  codeShare: number;
+  codeMin: number;
+  /** Multiplier for the shares of the list sections (requests, done, open, failures). */
+  listScale: number;
+  /** Units cut out of clipped transcript messages may be selected as context excerpts. */
+  clippedExcerpts: boolean;
+}
+
+/**
+ * Chosen with the compression lab on real conversations (docs/compression-lab.md): long messages
+ * are clipped harder in the transcript and their middle competes for the context budget instead.
+ */
+export const DEFAULT_LAYOUT: Layout = {
+  recentShare: 0.25,
+  recentMin: 2500,
+  lastMsgCap: 2500,
+  recentMsgCap: 1500,
+  codeShare: 0.1,
+  codeMin: 600,
+  listScale: 1,
+  clippedExcerpts: true,
+};
+
+/** v1.1 layout, kept for comparison in the compression lab. */
+export const V11_LAYOUT: Layout = { ...DEFAULT_LAYOUT, lastMsgCap: 6000, recentMsgCap: 4000, codeShare: 0.25, codeMin: 1500, clippedExcerpts: false };
+
+/** Earlier-context selection used by default (chosen with the compression lab, docs/compression-lab.md). */
+export const DEFAULT_SELECTION: 'relevance' | 'coverage' = 'coverage';
 
 /** Conversations up to this size are handed off in full: nothing needs to be dropped. */
 export const FULL_MODE_TOKENS = 12_000;
@@ -82,7 +129,10 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
   const msgTokens = new Float64Array(N);
   const msgUnitStart = new Int32Array(N + 1);
   let userText = '';
+  const progress = opts.onProgress;
+  const step = Math.max(1, Math.floor(N / 50));
   for (let m = 0; m < N; m++) {
+    if (progress && m % step === 0) progress((0.35 * m) / N);
     msgUnitStart[m] = units.length;
     segmentMessage(messages[m], m, units);
     let chars = 0;
@@ -106,7 +156,9 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
   const U = units.length;
   const flags = new Uint32Array(U);
   const sigs: Array<Uint32Array | undefined> = new Array(U);
+  const uStep = Math.max(1, Math.floor(U / 40));
   for (let i = 0; i < U; i++) {
+    if (progress && i % uStep === 0) progress(0.35 + (0.3 * i) / U);
     const u = units[i];
     const entry = cache.get(u.key);
     const wantsSig = u.kind === 'code' ? u.text.length >= SIG_MIN_CODE : u.text.length >= (u.role === 'user' ? SIG_MIN_USER : SIG_MIN_PROSE);
@@ -125,6 +177,7 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
   }
   // Exact duplicates share a key; near duplicates share an LSH cluster. The representative is
   // the latest occurrence so the newest version of repeated code / text wins.
+  progress?.(0.65);
   const near = clusterNearDuplicates(sigs, (i) => (units[i].kind === 'code' ? `c:${units[i].lang ?? ''}` : `p:${units[i].role}`), 0.72);
   // Union-find over near-duplicate clusters and exact-key duplicates.
   const parent = Int32Array.from(near);
@@ -165,6 +218,7 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
     versions[latest] = Math.min(65535, msgs.size - 1);
   }
   timings.dedupeMs = clock() - t0;
+  progress?.(0.75);
 
   // ---------- 3. score ----------
   opts.onPhase?.('score');
@@ -220,15 +274,32 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
     score[i] = s;
   }
 
+  progress?.(0.85);
   const a: Analysis = { units, flags, score, rep, repeats, versions };
-  const doc = buildDocument(conv, a, { sourceTokens, msgTokens, msgUnitStart, confirmedMsgs, lang, now });
+  const ctx: BuildCtx = { sourceTokens, msgTokens, msgUnitStart, confirmedMsgs, lang, now, budgetTokens: opts.budgetTokens, selection: opts.selection ?? DEFAULT_SELECTION, layout: { ...DEFAULT_LAYOUT, ...opts.layout }, pastExtra: 0 };
+  let doc = buildDocument(conv, a, ctx);
   timings.scoreMs = clock() - t0;
 
   // ---------- 4. render ----------
+  progress?.(0.95);
   opts.onPhase?.('render');
   t0 = clock();
-  const markdown = renderHandoff(doc);
+  let markdown = renderHandoff(doc);
+  // Section estimates are conservative, so the first pass usually leaves part of the budget
+  // unused. One more pass gives the unused tokens to earlier context.
+  if (doc.budget != null) {
+    const unused = doc.budget - estimateTokens(markdown);
+    if (unused > doc.budget * 0.04) {
+      const second = buildDocument(conv, a, { ...ctx, pastExtra: Math.round(unused * 0.92) });
+      const md2 = renderHandoff(second);
+      if (estimateTokens(md2) <= doc.budget * 1.02) {
+        doc = second;
+        markdown = md2;
+      }
+    }
+  }
   timings.renderMs = clock() - t0;
+  progress?.(1);
 
   const outputTokens = estimateTokens(markdown);
   return {
@@ -253,6 +324,11 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
 }
 
 interface BuildCtx {
+  budgetTokens?: number;
+  selection: 'relevance' | 'coverage';
+  layout: Layout;
+  /** Extra tokens for earlier context (second pass, when the first one left budget unused). */
+  pastExtra: number;
   sourceTokens: number;
   msgTokens: Float64Array;
   msgUnitStart: Int32Array;
@@ -324,8 +400,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const unitsOf = (m: number) => Array.from({ length: ctx.msgUnitStart[m + 1] - ctx.msgUnitStart[m] }, (_, k) => ctx.msgUnitStart[m] + k);
   const all = Array.from({ length: U }, (_, i) => i);
 
-  const fullMode = ctx.sourceTokens <= FULL_MODE_TOKENS;
-  const capBudget = fullMode ? MAX_BUDGET : handoffBudget(ctx.sourceTokens);
+  const fullMode = ctx.budgetTokens != null ? ctx.sourceTokens <= ctx.budgetTokens : ctx.sourceTokens <= FULL_MODE_TOKENS;
+  const capBudget = ctx.budgetTokens ?? (fullMode ? MAX_BUDGET : handoffBudget(ctx.sourceTokens));
   const cap = (per: number, min: number, max: number) => Math.round(Math.min(max, Math.max(min, capBudget / per)));
   const MAX_DONE = cap(600, 10, 40);
   const MAX_OPEN = cap(500, 12, 50);
@@ -338,7 +414,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   // Token shares of the budget per section (compressed mode). Each section is filled by priority
   // until its share is used, so the whole document stays near the budget instead of growing with
   // every extra signal. Decisions and constraints are never cut by these shares.
-  const share = (f: number) => (fullMode ? Infinity : capBudget * f);
+  const share = (f: number) => (fullMode ? Infinity : capBudget * f * ctx.layout.listScale);
   const lineTokens = (text: string, max = 220) => estimateTokens(text.length > max ? text.slice(0, max) : text) + 8;
   /** Keeps the highest-priority indices (given in priority order) within maxTok; returns them in document order. */
   const fit = (byPriority: number[], maxTok: number, max = 220) => {
@@ -358,13 +434,14 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   let recentFrom = N;
   if (fullMode) recentFrom = 0;
   else {
-    const recentBudget = Math.max(2500, capBudget * 0.25);
+    const { recentShare, recentMin, lastMsgCap, recentMsgCap } = ctx.layout;
+    const recentBudget = Math.max(recentMin, capBudget * recentShare);
     let usedTok = 0;
     for (let m = N - 1; m >= 0; m--) {
       const tok = ctx.msgTokens[m];
       const mustKeep = N - m <= 2;
-      if (!mustKeep && usedTok + Math.min(tok, 4000) > recentBudget) break;
-      usedTok += Math.min(tok, mustKeep ? 6000 : 4000);
+      if (!mustKeep && usedTok + Math.min(tok, recentMsgCap) > recentBudget) break;
+      usedTok += Math.min(tok, mustKeep ? lastMsgCap : recentMsgCap);
       recentFrom = m;
     }
   }
@@ -800,14 +877,47 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       .join('\n'),
   );
 
+  // Recent raw messages (verbatim), or the whole conversation when it is short.
+  const recent: RecentMessage[] = [];
+  const recentClipped = new Set<number>();
+  const hiddenInRecent = new Set<number>();
+  for (let m = recentFrom; m < N; m++) {
+    const msg = conv.messages[m];
+    let body = transcriptBody(msg, ctx.lang);
+    const limit = full ? Infinity : N - m <= 2 ? ctx.layout.lastMsgCap : ctx.layout.recentMsgCap;
+    let clipped = false;
+    if (estimateTokens(body) > limit) {
+      body = clipMarkdown(body, limit);
+      clipped = true;
+    }
+    recent.push({ m, role: msg.role, model: msg.model, time: msg.created_at, body, clipped });
+    if (clipped) {
+      recentClipped.add(m);
+      if (!ctx.layout.clippedExcerpts) continue;
+      // Units cut out of a clipped message compete for the context budget like earlier units, so
+      // the middle of a very long message is not simply lost.
+      for (const i of unitsOf(m)) {
+        const probe = units[i].text.split('\n')[0].slice(0, 60).trim();
+        if (probe && !body.includes(probe)) hiddenInRecent.add(i);
+      }
+    }
+  }
+
+
   // Code: latest version of each code cluster, highest scoring first, within ~30% of budget.
   const code: CodeItem[] = [];
+  const codeInRecent = new Set<number>();
   if (!full) {
-    const codeBudget = Math.max(1500, budget * 0.25);
+    const codeBudget = Math.max(ctx.layout.codeMin, budget * ctx.layout.codeShare);
     const codeIdx = all.filter((i) => units[i].kind === 'code' && rep[i] === i && !(units[i].title ?? '').startsWith('tool:'));
     let usedTok = 0;
     for (const i of [...codeIdx].sort((x, y) => score[y] - score[x])) {
       const u = units[i];
+      // The latest version already appears verbatim in the recent transcript: point to it instead.
+      if (u.m >= recentFrom && !recentClipped.has(u.m)) {
+        codeInRecent.add(u.m);
+        continue;
+      }
       const lines = u.text.split('\n');
       const truncated = lines.length > 220;
       const body = truncated ? [...lines.slice(0, 170), `… (${lines.length - 200} lines omitted — see [#m${u.m + 1}])`, ...lines.slice(-30)].join('\n') : u.text;
@@ -819,27 +929,13 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     code.sort((x, y) => x.m - y.m);
   }
 
-  // Recent raw messages (verbatim), or the whole conversation when it is short.
-  const recent: RecentMessage[] = [];
-  for (let m = recentFrom; m < N; m++) {
-    const msg = conv.messages[m];
-    let body = transcriptBody(msg, ctx.lang);
-    const limit = full ? Infinity : N - m <= 2 ? 6000 : 4000;
-    let clipped = false;
-    if (estimateTokens(body) > limit) {
-      body = clipMarkdown(body, limit);
-      clipped = true;
-    }
-    recent.push({ m, role: msg.role, model: msg.model, time: msg.created_at, body, clipped });
-  }
-
   // Important past context: remaining budget filled with the best unused units before the recent
   // window. Selection is relevance-ranked and redundancy-aware (MMR-style): a candidate whose topic
   // words are already covered by what was selected adds little and is skipped.
   const past: PastItem[] = [];
   if (!full) {
     const used0 = fixedTokens + code.reduce((s, c) => s + estimateTokens(c.text), 0) + recent.reduce((s, r) => s + estimateTokens(r.body), 0);
-    let remaining = budget - used0 - 1500;
+    let remaining = budget - used0 - 1500 + ctx.pastExtra;
     // "Current focus" = what the latest requests, open tasks, next steps and decisions talk about.
     // Older text that shares those topics is relevant past context even without strong signals.
     const focus = new Set<string>();
@@ -852,7 +948,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     const cand: number[] = [];
     for (let i = 0; i < U; i++) {
       const u = units[i];
-      if (u.m >= recentFrom || !isProse(u) || u.kind === 'heading' || rep[i] !== i || isUsed(i) || flags[i] & F.POLITE || u.text.length < 12) continue;
+      if ((u.m >= recentFrom && !hiddenInRecent.has(i)) || !isProse(u) || u.kind === 'heading' || rep[i] !== i || isUsed(i) || flags[i] & F.POLITE || u.text.length < 12) continue;
       let r = 0;
       if (focus.size) {
         const tt = topics(i);
@@ -860,10 +956,55 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
         for (const t of tt) if (focus.has(t)) hit++;
         r = Math.min(2.5, (hit / Math.sqrt(tt.length + 1)) * 1.5);
       }
-      if (score[i] + r > 0.9) {
-        rel.set(i, score[i] + r);
+      // Coverage weighs concepts itself, so it considers every eligible unit.
+      if (ctx.selection === 'coverage' || score[i] + r > 0.9) {
+        rel.set(i, Math.max(0, score[i] + r));
         cand.push(i);
       }
+    }
+    if (ctx.selection === 'coverage') {
+      // Document-level coverage: concepts the handoff already shows (decisions, requests, recent
+      // transcript…) count as covered, so earlier context adds what is still missing.
+      const df = new Map<string, number>();
+      const tfAll = new Map<string, number>();
+      const byUser = new Set<string>();
+      for (let m = 0; m < N; m++) {
+        const seen = new Set<string>();
+        for (const i of unitsOf(m)) {
+          if (!isProse(units[i])) continue;
+          for (const t of topics(i)) {
+            seen.add(t);
+            tfAll.set(t, (tfAll.get(t) ?? 0) + 1);
+            if (units[i].role === 'user') byUser.add(t);
+          }
+        }
+        for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
+      }
+      const idf = (t: string) => Math.log((N + 1) / ((df.get(t) ?? 0) + 1)) + 1;
+      const weight = (c: string) => {
+        const parts = c.split(' ');
+        const base = parts.length === 1 ? idf(c) : 0.5 * (idf(parts[0]) + idf(parts[1]));
+        return base * (1 + Math.log(tfAll.get(parts[0]) ?? 1)) * (byUser.has(parts[0]) ? 1.5 : 1);
+      };
+      const covered = new Set<string>();
+      for (const i of used) for (const c of conceptsOf(topics(i))) covered.add(c);
+      for (let m = recentFrom; m < N; m++) for (const i of unitsOf(m)) if (isProse(units[i]) && !hiddenInRecent.has(i)) for (const c of conceptsOf(topics(i))) covered.add(c);
+      const maxRel = Math.max(1, ...cand.map((i) => rel.get(i)!));
+      const items: CoverItem[] = cand.map((i) => ({
+        id: i,
+        concepts: conceptsOf(topics(i)),
+        cost: estimateTokens(units[i].text) + 8,
+        prior: 0.5 + 0.5 * (rel.get(i)! / maxRel),
+      }));
+      for (const i of greedyCoverage(items, weight, Math.max(0, remaining), covered)) {
+        take(i);
+        remaining -= estimateTokens(units[i].text) + 8;
+        past.push({ text: units[i].kind === 'table' ? units[i].text : bulletText(units[i].text), m: units[i].m, u: i, role: units[i].role, table: units[i].kind === 'table' });
+      }
+      // Once every concept is covered, the rest of the budget goes to the most relevant units left.
+      let w = 0;
+      for (const i of cand) if (!isUsed(i)) cand[w++] = i;
+      cand.length = w;
     }
     cand.sort((x, y) => rel.get(y)! - rel.get(x)!);
     const covered = new Map<string, number>();
@@ -880,9 +1021,9 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       remaining -= tok;
       take(i);
       for (const t of tt) covered.set(t, (covered.get(t) ?? 0) + 1);
-      past.push({ text: units[i].kind === 'table' ? units[i].text : bulletText(units[i].text), m: units[i].m, role: units[i].role, table: units[i].kind === 'table' });
+      past.push({ text: units[i].kind === 'table' ? units[i].text : bulletText(units[i].text), m: units[i].m, u: i, role: units[i].role, table: units[i].kind === 'table' });
     }
-    past.sort((x, y) => x.m - y.m);
+    past.sort((x, y) => x.u - y.u);
   }
 
   return {
@@ -911,6 +1052,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     links,
     linksOmitted,
     code,
+    codeInRecent: [...codeInRecent].sort((x, y) => x - y),
     past,
     recent,
     uncertainCount: uncertain,

@@ -13,6 +13,7 @@ export interface WorkerRequest {
 
 export type WorkerMessage =
   | { type: 'phase'; phase: string }
+  | { type: 'progress'; fraction: number }
   | {
       type: 'done';
       markdown: string;
@@ -33,7 +34,19 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
     if (!conv) throw new Error('conversation not found');
     const cache = decodeCache(cacheRec);
     const loadMs = performance.now() - t0;
-    const res = runHandoff(conv, { cache, onPhase: (phase) => post({ type: 'phase', phase }) });
+    let last = -1;
+    const res = runHandoff(conv, {
+      cache,
+      onPhase: (phase) => post({ type: 'phase', phase }),
+      // Worker messages are delivered while the worker keeps computing; send whole percents only.
+      onProgress: (fraction) => {
+        const p = Math.floor(fraction * 100);
+        if (p !== last) {
+          last = p;
+          post({ type: 'progress', fraction });
+        }
+      },
+    });
     const t1 = performance.now();
     await putHandoffCache(encodeCache(key, res.cache)).catch(() => undefined);
     post({ type: 'done', markdown: res.markdown, lang: res.lang, stats: res.stats, timings: { ...res.timings, loadMs, cacheSaveMs: performance.now() - t1 } });

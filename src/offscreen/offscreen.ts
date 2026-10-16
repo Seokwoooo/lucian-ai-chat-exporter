@@ -30,8 +30,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
-function progress(jobId: string, label: string): void {
-  void chrome.runtime.sendMessage({ type: 'offscreen-progress', jobId, label }).catch(() => undefined);
+function progress(jobId: string, label: string, percent?: number): void {
+  void chrome.runtime.sendMessage({ type: 'offscreen-progress', jobId, label, percent }).catch(() => undefined);
+}
+
+/** Reports whole-percent steps only, so long jobs send at most ~100 updates. */
+function percentReporter(jobId: string, label: string): (fraction: number) => void {
+  let last = -1;
+  return (fraction) => {
+    const p = Math.floor(fraction * 100);
+    if (p === last) return;
+    last = p;
+    progress(jobId, label, p);
+  };
 }
 
 function blobUrl(bytes: Uint8Array | string, mime: string): string {
@@ -51,6 +62,7 @@ async function build(req: BuildRequest): Promise<BuildResponse> {
 // ---------- handoff ----------
 
 function runWorker(req: BuildRequest): Promise<Extract<WorkerMessage, { type: 'done' }>> {
+  const report = percentReporter(req.jobId, 'handoff');
   return new Promise((resolve, reject) => {
     const worker = new Worker(chrome.runtime.getURL('handoff-worker.js'), { type: 'module' });
     const timer = setTimeout(() => {
@@ -60,6 +72,7 @@ function runWorker(req: BuildRequest): Promise<Extract<WorkerMessage, { type: 'd
     worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
       const m = e.data;
       if (m.type === 'phase') progress(req.jobId, m.phase);
+      else if (m.type === 'progress') report(m.fraction);
       else {
         clearTimeout(timer);
         worker.terminate();
@@ -198,6 +211,7 @@ async function buildExport(req: BuildRequest, conv: Conversation, t0: number): P
     parseXml: (s) => parser.parseFromString(s, 'application/xml'),
     parseHtml: (s) => parser.parseFromString(s, 'text/html'),
     appVersion: req.appVersion,
+    onProgress: percentReporter(req.jobId, format),
   });
   return {
     ok: true,
@@ -206,6 +220,6 @@ async function buildExport(req: BuildRequest, conv: Conversation, t0: number): P
     mime: out.mime,
     bytes: out.bytes.byteLength,
     verification: out.verification,
-    timings: { processMs: performance.now() - t0 },
+    timings: { processMs: performance.now() - t0, buildMs: out.stageMs?.build, verifyMs: out.stageMs?.verify },
   };
 }

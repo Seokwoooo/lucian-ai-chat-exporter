@@ -69,6 +69,9 @@ const results = await Promise.all([
 cpSync('src/static/_locales', join(DIST, '_locales'), { recursive: true });
 mkdirSync(join(DIST, 'icons'), { recursive: true });
 for (const s of [16, 32, 48, 128]) cpSync(`src/static/icons/icon-${s}.png`, join(DIST, 'icons', `icon-${s}.png`));
+// Service logos for the handoff illustration (popup + in-page panel). Trademarks of their owners,
+// shown only to name the services the extension works with.
+cpSync('src/static/providers', join(DIST, 'providers'), { recursive: true });
 for (const [from, to] of [
   ['src/popup/popup.html', 'popup.html'],
   ['src/popup/popup.css', 'popup.css'],

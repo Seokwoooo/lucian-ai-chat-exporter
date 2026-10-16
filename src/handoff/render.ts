@@ -33,6 +33,8 @@ export interface CodeItem {
 export interface PastItem {
   text: string;
   m: number;
+  /** Unit index, so excerpts of one message keep their original order. */
+  u: number;
   role: Role;
   table?: boolean;
 }
@@ -81,6 +83,8 @@ export interface HandoffDoc {
   links: Array<{ text: string; m: number; title?: string; count: number }>;
   linksOmitted: number;
   code: CodeItem[];
+  /** Messages in the recent transcript whose code is not repeated in the code section. */
+  codeInRecent: number[];
   past: PastItem[];
   recent: RecentMessage[];
   uncertainCount: number;
@@ -119,6 +123,7 @@ const L = {
     done: '완료한 작업',
     current: '현재 진행 상황 (마지막 작업 지점)',
     lastUser: '마지막 사용자 요청',
+    fullBelow: '(전체는 아래 대화 원문 {ref})',
     lastAssistant: '마지막 AI 응답의 핵심 문장',
     noReply: '마지막 요청에 대한 AI 응답이 아직 없습니다. 이 요청부터 처리하세요.',
     open: '미완료 작업 · 해결되지 않은 문제',
@@ -131,10 +136,11 @@ const L = {
     commands: '명령어',
     latestCode: '최신 코드 (같은 코드의 이전 버전은 생략)',
     olderVersions: '이전 버전 {n}개 생략',
+    codeInRecent: '최근 대화 원문에 있는 코드는 그곳에만 둡니다: {refs}',
     truncatedCode: '일부 생략',
     links: '참고 링크 · 출처',
     linksOmitted: '… 덜 언급된 링크 {n}개는 생략했습니다',
-    past: '중요한 과거 맥락 (원문 발췌)',
+    past: '중요한 맥락 (원문 발췌)',
     recent: '최근 대화 원문',
     transcript: '전체 대화 원문',
     clipped: '(길어서 가운데 일부 생략)',
@@ -182,6 +188,7 @@ const L = {
     done: 'Completed work',
     current: 'Current state (last point of work)',
     lastUser: 'Last user request',
+    fullBelow: '(full text in the transcript below, {ref})',
     lastAssistant: 'Key sentences of the last AI reply',
     noReply: 'The last request has no AI reply yet. Start by handling it.',
     open: 'Open tasks · unresolved problems',
@@ -194,10 +201,11 @@ const L = {
     commands: 'Commands',
     latestCode: 'Latest code (earlier versions of the same code omitted)',
     olderVersions: '{n} earlier versions omitted',
+    codeInRecent: 'Code that is in the recent transcript is shown only there: {refs}',
     truncatedCode: 'partly omitted',
     links: 'Links & sources',
     linksOmitted: '… {n} less referenced links omitted',
-    past: 'Important earlier context (verbatim excerpts)',
+    past: 'Important context (verbatim excerpts)',
     recent: 'Recent conversation (verbatim)',
     transcript: 'Full conversation (verbatim)',
     clipped: '(long message — middle part omitted)',
@@ -344,10 +352,14 @@ export function renderHandoff(doc: HandoffDoc): string {
       .map((c) => c.content ?? '')
       .join('\n')
       .trim();
-    const clipped = text.length > 3000 ? `${text.slice(0, 3000)}…` : text;
+    // When the request is in the verbatim transcript below, a short quote is enough here.
+    const inTranscript = doc.recent.some((r) => r.m === doc.lastUser && !r.clipped);
+    const max = inTranscript ? 400 : 3000;
+    const clipped = text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
     out.push(`**${S.lastUser}** ${ref(doc.lastUser)}`);
     out.push('');
     out.push(clipped.split('\n').map((l) => `> ${l}`).join('\n'));
+    if (clipped !== text && inTranscript) out.push(`> ${fill(S.fullBelow, { ref: ref(doc.lastUser) })}`);
     out.push('');
   }
   if (doc.lastAssistant > doc.lastUser && doc.lastAssistantKey.length) {
@@ -384,7 +396,7 @@ export function renderHandoff(doc: HandoffDoc): string {
     out.push('');
   }
 
-  if (doc.files.length || doc.commands.length || doc.code.length) {
+  if (doc.files.length || doc.commands.length || doc.code.length || doc.codeInRecent.length) {
     section(S.code);
     if (doc.files.length) {
       out.push(`### ${S.files}`);
@@ -400,9 +412,13 @@ export function renderHandoff(doc: HandoffDoc): string {
       out.push(`${fc}bash\n${body}\n${fc}`);
       out.push('');
     }
-    if (doc.code.length) {
+    if (doc.code.length || doc.codeInRecent.length) {
       out.push(`### ${S.latestCode}`);
       out.push('');
+      if (doc.codeInRecent.length) {
+        out.push(fill(S.codeInRecent, { refs: doc.codeInRecent.map(ref).join(', ') }));
+        out.push('');
+      }
       for (const c of doc.code) {
         const label = [c.title && !c.title.startsWith('tool:') ? c.title : '', c.lang ?? ''].filter(Boolean).join(' · ') || 'code';
         const notes = [c.versions > 0 ? fill(S.olderVersions, { n: c.versions }) : '', c.truncated ? S.truncatedCode : ''].filter(Boolean).join(', ');
@@ -454,7 +470,7 @@ export function renderHandoff(doc: HandoffDoc): string {
     out.push('');
     out.push(S.refsHead);
     out.push('|---|---|---|---|');
-    const shown = sorted.length > 80 ? sorted.slice(-80) : sorted;
+    const shown = sorted.length > 40 ? sorted.slice(-40) : sorted;
     if (shown.length < sorted.length) out.push(`| … | | | ${fill(S.refsOmitted, { n: sorted.length - shown.length })} |`);
     for (const m of shown) {
       const msg = conv.messages[m];

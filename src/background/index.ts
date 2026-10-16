@@ -122,7 +122,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'offscreen-progress': {
       const job = findJob(String((m as { jobId: string }).jobId));
       if (job && job.phase === 'processing') {
-        job.progress = { label: String((m as { label: string }).label) };
+        const pct = (m as { percent?: number }).percent;
+        job.progress = typeof pct === 'number' ? { label: 'percent', done: pct, total: 100 } : { label: String((m as { label: string }).label) };
         void saveJob(job);
       }
       return false;

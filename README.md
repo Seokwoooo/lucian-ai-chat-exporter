@@ -14,7 +14,7 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 |---|---|---|
 | ![답변 아래 버튼](docs/images/page-button-done.png) | ![팝업](docs/images/popup-handoff-done.png) | ![다크 모드](docs/images/popup-dark.png) |
 
-**두 곳에서 실행할 수 있습니다.** 답변이 끝나면 각 답변 아래 도구 막대(복사·다시 생성 버튼 옆)에 작은 Lucian 버튼이 나타나고, 브라우저 툴바의 Lucian 아이콘으로도 같은 기능을 엽니다. 어느 쪽에서 시작해도 같은 작업이며, 진행 상황과 결과가 양쪽에 보입니다.
+**두 곳에서 실행할 수 있습니다.** 답변이 끝나면 각 답변 아래 도구 막대(복사·다시 생성 버튼 옆)에 은은한 보라·청록 빛 링이 도는 Lucian 버튼이 나타나고, 브라우저 툴바의 Lucian 아이콘으로도 같은 기능을 엽니다. 어느 쪽에서 시작해도 같은 작업이며, 진행 상황(“처리 중… (n% 완료)”)과 결과가 양쪽에 보입니다.
 
 ---
 
@@ -22,14 +22,15 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 ### 1. AI에게 인수인계하기 — `인수인계 Markdown 추출`
 
-버튼 하나로 `lucian-handoff-2026-10-16.md` 같은 파일이 저장됩니다. 이 파일을 다른 AI(다른 서비스나 새 대화)에 첨부하면 그 AI가 작업을 바로 이어받을 수 있습니다.
+버튼 하나로 `lucian-handoff-2026-10-16.md` 같은 파일이 저장됩니다. 이 파일을 다른 AI(다른 서비스나 새 대화)에 첨부하면 그 AI가 작업을 바로 이어받을 수 있습니다. 버튼 위의 작은 그림(지금 쓰는 서비스 로고 → 곡선 화살표 → 다른 서비스 로고)이 이 흐름을 보여 줍니다.
 
-- 문서 맨 위에 **읽는 AI를 위한 안내문**이 있습니다. 이어서 기본 정보, 목표와 요청 흐름(처음 요청 + 이후 요청을 시간순으로, 긴 대화는 각 답변의 요지 한 줄과 함께), 확정된 결정(최신 기준), 지시·제한·금지사항, 완료한 작업, 현재 상태, 미완료 문제, 다음 작업, 실패 원인, 핵심 코드·파일, 참고 링크, 원문(짧은 대화는 전체, 긴 대화는 최근) 순으로 정리됩니다. 내용이 없는 섹션은 넣지 않습니다.
+- 문서 맨 위에 **읽는 AI를 위한 안내문**이 있습니다. 이어서 기본 정보, 목표와 요청 흐름(처음 요청 + 이후 요청을 시간순으로, 긴 대화는 각 답변의 요지 한 줄과 함께), 확정된 결정(최신 기준), 지시·제한·금지사항, 완료한 작업, 현재 상태, 미완료 문제, 다음 작업, 실패 원인, 핵심 코드·파일, 참고 링크, 중요한 맥락(원문 발췌), 원문(짧은 대화는 전체, 긴 대화는 최근) 순으로 정리됩니다. 내용이 없는 섹션은 넣지 않습니다.
 - **추출식 정리입니다.** LLM, 임베딩, 외부 API를 쓰지 않는 규칙 기반 TypeScript가 원문 문장을 그대로 발췌합니다. 그래서 없던 사실을 만들어 내지 않습니다. 모든 항목에는 원문 위치 `[#m12]`가 붙습니다.
 - 결정이 바뀌면 최신 결정을 우선하되, 이전 결정도 지우지 않고 남깁니다. 키워드만으로 바뀌었다고 단정하지 않고, 확신할 수 없는 항목은 ⚠️로 표시합니다.
 - 짧은 대화는 원문 전체를 포함하고, 긴 대화는 원문 분량의 약 12%(8k–32k 토큰)로 줄입니다. 섹션마다 토큰 몫을 정해 중요도 순으로 채우므로 문서가 목표 분량을 크게 넘지 않습니다.
+- **같은 분량에 더 많은 정보를 담습니다.** 남은 예산은 "예산 제약 최대 커버리지"로 채웁니다. 문서에 아직 없는 개념(단어·단어쌍)을 토큰당 가장 많이 새로 담는 원문 문장부터 고르는 방식입니다. 아주 긴 메시지는 원문 섹션에서 앞뒤만 보여 주고, 잘린 가운데의 문장·표도 같은 조건으로 고릅니다. 사용자의 실제 ChatGPT 대화 27개(약 152만 토큰)로 알고리즘 19가지를 비교해 정했습니다. v1.1보다 출력이 9% 짧으면서 핵심어 보존은 82% → 88%, 사실 문장 보존은 25% → 29%로 올랐습니다. 자세한 내용은 [압축 실험 보고서](docs/compression-lab.md)에 있습니다.
 - **잡음을 넣지 않습니다.** 웹 검색 답변에 딸린 수십~수백 개의 검색 결과 링크, 추적 파라미터(`utm_source` 등), 출처 칩, 서비스의 화면용 마크업은 빼고, 같은 문장은 한 섹션에만 넣습니다. 거의 같은 요청이 반복되면 한 줄로 묶고 횟수를 적습니다. 링크는 같은 페이지를 하나로 합쳐 많이 언급된 순으로 보여 줍니다.
-- 성능: 1M 토큰(3,782개 메시지) 대화의 문서 생성 시간이 **0.50초**입니다(데이터 확보 → Markdown 완료, Chrome 155, M2 Pro). 같은 대화를 다시 만들 때는 분석 캐시를 써서 **0.30초**입니다. 네트워크·수집·생성·저장 시간은 팝업에 따로 표시됩니다.
+- 성능: 1M 토큰(3,782개 메시지) 대화의 문서 생성 시간이 **0.63초**입니다(데이터 확보 → Markdown 완료, Chrome 155, M2 Pro). 같은 대화를 다시 만들 때는 분석 캐시를 써서 **0.42초**입니다. 네트워크·수집·생성·저장 시간은 팝업에 따로 표시됩니다.
 
 ### 2. 전체 대화 내보내기
 
@@ -50,7 +51,7 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 ### 릴리스 ZIP으로 설치 (개발자 모드)
 
-1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.1.0.zip`을 받아 압축을 풉니다.
+1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.2.0.zip`을 받아 압축을 풉니다.
 2. Chrome 주소창에 `chrome://extensions`를 입력합니다.
 3. 오른쪽 위 **개발자 모드**를 켭니다.
 4. **압축해제된 확장 프로그램을 로드합니다**를 누르고, 압축을 푼 폴더(`manifest.json`이 있는 폴더)를 고릅니다.
@@ -114,7 +115,7 @@ Chrome 116 이상이 필요합니다.
 - HWPX는 공식 XSD 검증과 오픈소스 렌더러(rhwp)로 확인했고, **한컴오피스에서 직접 열어 보지는 않았습니다.** DOCX도 python-docx와 macOS 미리보기로 확인했고, **MS Word로는 열어 보지 않았습니다.**
 - Gemini의 사고 과정과 출처는 파싱하지 않습니다. 실제 계정에 10턴이 넘는 Gemini 대화가 없어서, 여러 페이지로 나뉜 Gemini 수집은 실제 데이터로 확인하지 못했습니다(모의 데이터로는 확인).
 - 긴 도구 출력(웹 페이지 본문, 명령 실행 로그 등)은 문서에 앞부분 2,000자만 넣습니다. 전체는 JSON·ZIP 백업에 있고, 검증 결과에도 표시됩니다.
-- 1M 토큰 대화의 DOCX 생성에는 약 7초가 걸립니다(Markdown 0.1초, HWPX 1초).
+- 1M 토큰 대화의 DOCX 생성에는 약 2초가 걸립니다(Markdown 0.1초, HWPX 1초). 긴 작업은 진행률(%)을 보여 줍니다.
 - 다운로드 관리 확장 프로그램(Video DownloadHelper 등)은 다른 확장의 파일 이름을 바꾸기도 합니다. Lucian은 자기 다운로드의 이름을 직접 지정해 이를 막고, 그래도 바뀌면 검증 결과에 경고로 표시합니다. Lucian보다 나중에 설치한 다운로드 관리 확장이 이름을 덮어쓰면 막을 수 없습니다.
 
 ---
@@ -145,16 +146,18 @@ npm run package             # release/lucian-ai-chat-exporter-v<version>.zip (Ch
 
 [MIT](LICENSE) © 2026 Seokwoooo. 번들된 오픈소스 라이선스는 빌드 결과물의 `THIRD_PARTY_NOTICES.txt`에 있습니다.
 
+ChatGPT·OpenAI, Claude·Anthropic, Gemini·Google, Grok·xAI의 이름과 로고는 각 회사의 상표입니다. 인수인계 그림에서 서비스를 가리키는 용도로만 쓰며, 이 프로젝트는 어느 회사와도 관련이 없습니다.
+
 ---
 
 ## English
 
 **Lucian AI Chat Exporter** is a Chrome extension (Manifest V3) for ChatGPT, Claude, Gemini and Grok with exactly two features:
 
-1. **Handoff to another AI** — one click saves `lucian-handoff-YYYY-MM-DD.md`. It starts with instructions for the AI that reads it, followed by source info, the goal and request flow (every later request in order, with a one-line gist of each answer in long chats), confirmed decisions (latest first, older ones kept), instructions and constraints, completed work, current state, open problems, next steps, failure causes, key code and files, links and the transcript (full for short chats, recent for long ones). Empty sections are left out. It is **extractive and rule-based**: no LLM, no embeddings, no external API. Every line points back to `[#mN]`, and uncertain judgements are marked ⚠️ instead of guessed. Noise is kept out: uncited search results, tracking parameters, citation chips and UI markup are dropped, each sentence appears in one section only, near-identical requests collapse into one line, and every section has a token share of the budget. A 1M-token conversation (3,782 messages) is processed in **0.50 s** (0.30 s with the incremental cache) inside Chrome.
+1. **Handoff to another AI** — one click saves `lucian-handoff-YYYY-MM-DD.md`. It starts with instructions for the AI that reads it, followed by source info, the goal and request flow (every later request in order, with a one-line gist of each answer in long chats), confirmed decisions (latest first, older ones kept), instructions and constraints, completed work, current state, open problems, next steps, failure causes, key code and files, links, important context (verbatim excerpts) and the transcript (full for short chats, recent for long ones). Empty sections are left out. It is **extractive and rule-based**: no LLM, no embeddings, no external API. Every line points back to `[#mN]`, and uncertain judgements are marked ⚠️ instead of guessed. Noise is kept out: uncited search results, tracking parameters, citation chips and UI markup are dropped, each sentence appears in one section only, near-identical requests collapse into one line, and every section has a token share of the budget. Earlier context is chosen by budgeted maximum coverage (the verbatim sentences that add the most not-yet-covered concepts per token), and the middle of very long messages competes for the budget instead of being cut away — chosen by comparing 19 algorithms on 27 of the author's real ChatGPT conversations ([compression lab](docs/compression-lab.md)). A 1M-token conversation (3,782 messages) is processed in **0.63 s** (0.42 s with the incremental cache) inside Chrome.
 2. **Full export** — PDF (Chrome's print engine, locally), Markdown and Word. **More formats** adds real HWPX (OWPML, validated against the official XSD), HTML, TXT, JSON and a ZIP backup with images, attachments and a verification report. Each export is verified: source message count vs. exported, images, attachments, math, and file integrity. Gaps are reported, never hidden.
 
-Both features open from a small **Lucian button under every finished answer** (next to copy/retry) and from the toolbar icon. Documents list the sources an answer actually cited; uncited search results stay in the JSON/ZIP backup.
+Both features open from a small **Lucian button under every finished answer** (next to copy/retry, with a soft violet–cyan glow) and from the toolbar icon. Long jobs show “Processing… (n% done)”. A small illustration above the handoff button (this service's logo → curved arrow → the other services) shows what a handoff is. Documents list the sources an answer actually cited; uncited search results stay in the JSON/ZIP backup.
 
 **Install:** download the release ZIP → unzip → `chrome://extensions` → enable *Developer mode* → *Load unpacked* → select the folder → reload the chat page.
 
@@ -164,4 +167,4 @@ Both features open from a small **Lucian button under every finished answer** (n
 
 **Development:** `npm ci && npm run check`, `npm run test:e2e` (after `npm run e2e:install-chrome`), `npm run package`.
 
-MIT licensed.
+MIT licensed. Service names and logos (ChatGPT/OpenAI, Claude/Anthropic, Gemini/Google, Grok/xAI) are trademarks of their owners, used only to name the services; this project is not affiliated with any of them.

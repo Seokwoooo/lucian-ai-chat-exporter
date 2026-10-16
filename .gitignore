@@ -31,3 +31,4 @@ Thumbs.db
 *.log
 bench-results/bench.mjs
 bench-results/sample-*.md
+dist-lab/

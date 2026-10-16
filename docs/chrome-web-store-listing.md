@@ -1,6 +1,6 @@
 # Chrome 웹 스토어 등록 정보 (초안)
 
-업로드 파일: `release/lucian-ai-chat-exporter-v1.1.0.zip` (`npm run package`로 생성, SHA-256은 같은 폴더의 `.sha256` 파일)
+업로드 파일: `release/lucian-ai-chat-exporter-v1.2.0.zip` (`npm run package`로 생성, SHA-256은 같은 폴더의 `.sha256` 파일)
 
 ## 기본 정보
 

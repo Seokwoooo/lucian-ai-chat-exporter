@@ -32,6 +32,12 @@ Lucian AI Chat Exporter가 요청하는 권한과 그 이유입니다. 기능에
 | `inject.js` | 지원 사이트, `document_start`, **MAIN world** | 페이지가 서비스 서버로 보내는 요청의 헤더(ChatGPT 인증 헤더, Gemini `_reqid`·`x-goog-ext-*`, Grok `x-*`)를 **관찰만** 합니다. 확장이 같은 형식으로 대화를 요청할 수 있도록, 값은 그 탭의 메모리에만 둡니다. 요청 내용을 바꾸거나 막지 않습니다. |
 | `content.js` | 지원 사이트, `document_idle`, isolated world | 사용자가 버튼을 누를 때만 대화를 수집해 서비스 워커로 넘깁니다. 답변 아래 도구 막대(복사·다시 생성 버튼 옆)에 작은 Lucian 버튼 하나를 Shadow DOM으로 추가합니다. 사이트의 기존 버튼과 화면은 옮기거나 바꾸지 않으며, 버튼을 누르기 전에는 대화를 읽지 않습니다. |
 
+## 웹 접근 가능 리소스
+
+| 리소스 | 공개 대상 | 이유 |
+|---|---|---|
+| `providers/*.svg` (ChatGPT·Claude·Gemini·Grok 로고) | 위 다섯 AI 사이트 | 답변 아래 Lucian 패널의 인수인계 그림(“이 AI → 다른 AI”)이 페이지 안 Shadow DOM에서 로고 이미지를 불러오기 위한 것입니다. 정적 이미지뿐이며 코드나 데이터는 공개하지 않습니다. |
+
 ## 쿠키 사용
 
 `cookies` 권한은 없습니다. 콘텐츠 스크립트가 같은 출처의 `document.cookie`에서 아래 두 값만 읽습니다. 둘 다 인증 토큰이 아니며 저장하지 않습니다.

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { runHandoff } from '../../src/handoff/engine';
+import { handoffBudget, runHandoff } from '../../src/handoff/engine';
 import { verifyHandoffMarkdown } from '../../src/handoff/render';
-import { englishScenario, koreanScenario, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
+import { conv as makeConv, englishScenario, koreanScenario, msg, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
 import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
 import { CHATGPT_ID, chatgptConversation } from '../fixtures/sites';
+import { estimateTokens } from '../../src/shared/util';
 
 /**
  * Returns the body of the "## N. {title}…" section (until the next level-2 heading). Sections are
@@ -68,7 +69,10 @@ describe('handoff accuracy — Korean scenario (Electron → Tauri)', () => {
     const code = section(md, CODE);
     expect(code).toMatch(/src-tauri\/tauri\.conf\.json/);
     expect(code).toMatch(/src\/main\.rs/);
-    expect(code).toMatch(/tauri::Builder/);
+    // The latest code is in the recent transcript, so the code section points there instead of
+    // repeating it; the document still contains it exactly once.
+    expect(code).toMatch(/최근 대화 원문에 있는 코드는 그곳에만 둡니다: \[#m\d+\]/);
+    expect(md.match(/tauri::Builder::default/g)).toHaveLength(1);
   });
 
   it('separates completed work from open work', () => {
@@ -216,6 +220,41 @@ describe('handoff noise control — web-search research chat (user report, 2026-
     // Advice ("~확인해야 합니다") and descriptions of other projects are not the user's tasks.
     expect(section(md, '미완료 작업')).not.toMatch(/동기화 제한도 확인해야 합니다/);
     expect(section(md, '완료한 작업')).not.toMatch(/테마 12개를 자체 제작해 작성했습니다/);
+  });
+});
+
+describe('handoff — very long messages (real-data shape, 2026-10)', () => {
+  // Real ChatGPT sessions often hold most of their text in a few huge messages (a pasted spec, a
+  // long report). The transcript clips such messages; their middle must still compete for the
+  // budget instead of disappearing (compression lab, docs/compression-lab.md).
+  // Every paragraph uses its own words, so paragraphs are not near-duplicates of each other.
+  const nouns = ['캐시', '배포', '권한', '색인', '알림', '결제', '로그', '이미지', '세션', '쿼터', '백업', '토큰', '웹훅', '큐', '스키마', '리전', '샤드', '버킷', '정책', '감사'];
+  const verbs = ['분리합니다', '줄입니다', '검증합니다', '기록합니다', '재시도합니다', '압축합니다', '암호화합니다', '보관합니다', '격리합니다', '정렬합니다', '나눕니다'];
+  const paragraph = (k: number) => {
+    const a = nouns[k % 20];
+    const b = nouns[(k * 7 + 3) % 20];
+    const c = nouns[(k * 13 + 5) % 20];
+    return `항목 ${k}: ${a} 계층은 ${b}${k} 단위로 ${verbs[k % 11]}. ${c} 설정 cfg_${a.length}${k}_${b.length}는 ${(k * 37) % 997}ms 기준이고, ${verbs[(k + 5) % 11].replace('니다', '면')} handler${k}()가 ${nouns[(k * 3 + 1) % 20]}${k * 11}을 ${verbs[(k + 3) % 11]}.`;
+  };
+  const report = Array.from({ length: 600 }, (_, k) => paragraph(k)).join('\n\n');
+  const c = makeConv([
+    msg('user', '아래 설계 문서를 검토하고 위험한 설정을 찾아 주세요.'),
+    msg('assistant', report),
+    msg('user', '좋아요. 결제 재시도 부분부터 고쳐 주세요.'),
+    msg('assistant', `결제 재시도 설정을 고쳤습니다.\n\n${report.slice(0, 20_000)}`),
+  ]);
+  const r = runHandoff(c, { now: 0 });
+  const md = r.markdown;
+
+  it('keeps excerpts from the middle of a clipped message, within the budget', () => {
+    expect(r.stats.mode).toBe('compressed');
+    expect(md).toMatch(/\[omitted ~\d+ tokens\]/);
+    const excerpts = section(md, '중요한 맥락');
+    expect(excerpts).toMatch(/\[#m2\]/);
+    // A paragraph from the middle of the 600-paragraph report survives as a verbatim excerpt.
+    const middle = [...excerpts.matchAll(/항목 (\d+):/g)].map((m) => Number(m[1]));
+    expect(middle.some((k) => k > 150 && k < 450)).toBe(true);
+    expect(estimateTokens(md)).toBeLessThanOrEqual(handoffBudget(r.stats.sourceTokens) * 1.05);
   });
 });
 

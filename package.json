@@ -1,6 +1,6 @@
 {
   "name": "lucian-ai-chat-exporter",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Lucian AI Chat Exporter — one-click AI chat handoff and full-fidelity export for ChatGPT, Claude, Gemini and Grok.",
   "license": "MIT",
@@ -16,7 +16,10 @@
     "bench": "node scripts/bench.mjs",
     "package": "node scripts/build.mjs && node scripts/package.mjs",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build",
-    "e2e:install-chrome": "npx @puppeteer/browsers install chrome@stable --path ~/.cache/lucian-cft"
+    "e2e:install-chrome": "npx @puppeteer/browsers install chrome@stable --path ~/.cache/lucian-cft",
+    "lab": "esbuild scripts/compression-lab/node-entry.ts --bundle --platform=node --format=esm --outfile=dist-lab/lab-node.mjs --log-level=error && node dist-lab/lab-node.mjs",
+    "lab:browser": "node scripts/compression-lab/build-browser.mjs",
+    "lab:file": "esbuild scripts/compression-lab/file-entry.ts --bundle --platform=node --format=esm --outfile=dist-lab/lab-file.mjs --log-level=error && node dist-lab/lab-file.mjs"
   },
   "engines": {
     "node": ">=20"

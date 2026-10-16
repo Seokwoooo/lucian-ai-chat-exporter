@@ -5,7 +5,7 @@
 import { zipSync, strToU8, type Zippable } from 'fflate';
 import type { Locale } from '../../shared/i18n';
 import type { Conversation } from '../../shared/types';
-import { escapeXml } from '../../shared/util';
+import { escapeXml, yieldToLoop, type ProgressFn } from '../../shared/util';
 import type { ImageStore } from '../images';
 import { buildHeaderXml, NS_DECL, ShapeRegistry, XML_DECL } from './header';
 import { SectionWriter, type HwpxStats } from './section';
@@ -14,13 +14,21 @@ export const HWPX_MIME = 'application/hwp+zip';
 
 export async function buildHwpx(
   conv: Conversation,
-  opts: { locale: Locale; images: ImageStore; exportedAt?: number; appVersion?: string },
+  opts: { locale: Locale; images: ImageStore; exportedAt?: number; appVersion?: string; onProgress?: ProgressFn },
 ): Promise<{ bytes: Uint8Array; stats: HwpxStats }> {
   const exportedAt = opts.exportedAt ?? Date.now();
   const reg = new ShapeRegistry();
   const writer = new SectionWriter(reg, opts.locale, opts.images);
   writer.documentHead(conv, exportedAt);
-  for (const m of conv.messages) writer.message(conv, m);
+  const N = conv.messages.length;
+  for (let i = 0; i < N; i++) {
+    writer.message(conv, conv.messages[i]);
+    if (opts.onProgress && i % 50 === 49) {
+      opts.onProgress((0.8 * (i + 1)) / N, 'build');
+      await yieldToLoop();
+    }
+  }
+  opts.onProgress?.(0.8, 'pack');
   const section = writer.toXml();
   const header = buildHeaderXml(reg);
   const iso = new Date(exportedAt).toISOString().replace(/\.\d{3}Z$/, 'Z');
