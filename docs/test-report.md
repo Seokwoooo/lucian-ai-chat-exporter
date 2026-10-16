@@ -25,6 +25,7 @@
 | 실제 서비스 | 로그인된 Chrome에서 읽기 전용 스니펫으로 4개 서비스의 내부 API 응답 구조와 DOM 구조 확인 | 4개 서비스 모두 API 경로 동작, 바뀐 부분 5곳 발견·수정 (§6) |
 | 형식 검증 | 외부 도구로 E2E 결과 파일 검사 | HWPX XSD 통과, DOCX 파싱, PDF 페이지·한글 텍스트 확인 |
 | 정적 검사 | `tsc --noEmit`, ESLint, 빌드 결과물의 `eval`/`new Function` 검사 | 통과 |
+| CI | GitHub Actions (ubuntu-latest, Node 24): 위 검사 + 단위 테스트 + 패키징 + E2E(Chrome for Testing stable, 1M 포함) | 통과 |
 
 ## 3. 단위 테스트 (49개)
 
@@ -164,10 +165,9 @@ E2E로 찾아 고친 버그:
 - 실제 Claude·Grok·Gemini의 이미지·첨부 다운로드 — ChatGPT 이미지만 실제로 확인했습니다.
 - 실제 대화의 수식·표 렌더링 품질(합성 fixture로만 확인)
 - 한컴오피스(한글)로 HWPX 열기, Microsoft Word로 DOCX 열기
-- Windows·Linux, Chrome 155 이외 버전(최소 116으로 선언했지만 실행 확인은 155만), Edge 등 다른 Chromium 브라우저
+- Windows, Chrome 155 이외 버전(최소 116으로 선언했지만 실행 확인은 155와 CI의 최신 stable만), Edge 등 다른 Chromium 브라우저. Linux는 CI의 E2E(모의 사이트)로만 확인했습니다.
 - 인쇄 창에서 사용자가 “PDF로 저장”을 누르는 마지막 단계. E2E는 같은 인쇄 페이지를 `page.pdf`로 출력해 확인했습니다.
 - 메모리 사용량은 Node 힙 증가량(1M: 26 MB)만 측정했습니다. 확장 프로세스의 메모리는 측정하지 않았습니다.
-- 이 보고서 작성 시점에는 GitHub Actions CI가 아직 실행되지 않았습니다(첫 푸시 후 확인).
 
 ## 8. 재현 방법
 
