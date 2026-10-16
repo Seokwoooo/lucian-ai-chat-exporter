@@ -215,3 +215,85 @@ export function chatgptModernConversation() {
   });
   return { title: '구조 분석', create_time: t(10), update_time: t(11), mapping, current_node: 'final', default_model_slug: 'gpt-5-thinking' };
 }
+
+/**
+ * ChatGPT search answer shaped like the 2026-10 rich format (structure observed on chatgpt.com;
+ * all text and URLs are synthetic): `<Cite ref(s)>` ids that point at search_result_groups ref_ids,
+ * `<Link>` components, layout boxes with indented children, and 100+ searched-but-uncited pages.
+ */
+export function chatgptRichSearchConversation() {
+  const node = (id: string, parent: string | null, children: string[], message: unknown) => ({ id, parent, children, message });
+  const entry = (i: number, url: string, title: string, attribution?: string) => ({
+    type: 'search_result',
+    url,
+    title,
+    snippet: `snippet ${i}`,
+    ref_id: { turn_index: 7, ref_type: 'search', ref_index: i },
+    attribution,
+  });
+  const entries = [
+    entry(0, 'https://example.org/one?utm_source=chatgpt.com', '예시 문서 1', 'example.org'),
+    entry(1, 'https://docs.example.com/guide', 'Guide', 'docs.example.com'),
+    entry(2, 'https://www.example.net/page/', '페이지', undefined),
+    entry(3, 'https://unrelated.example/a', '관련 없는 검색 결과'),
+    entry(4, 'https://unrelated.example/b?utm_source=chatgpt.com', '또 다른 결과'),
+  ];
+  for (let i = 5; i < 120; i++) entries.push(entry(i, `https://search.example/${i}`, `결과 ${i}`));
+  const answer = [
+    '# 조사 결과',
+    '',
+    '<text color="secondary" size="sm">조사 기준: 합성 데이터</text>',
+    '',
+    '**결론부터 말씀드리면, A 방식을 권장합니다.** 근거는 공식 문서입니다. <Cite ref="turn7search0"/>',
+    '',
+    '| 사이트 | 내용 |',
+    '|---|---|',
+    '| <Link url="https://example.org/a?utm_source=chatgpt.com" title="예시 A"/> | 설명 <Cite refs={["turn7search1","turn7search2"]}/> |',
+    '',
+    '<box border radius="lg" padding={3} gap={2}>',
+    '  <title size="xl">무료 플랜 비교표</title>',
+    '  <row align="center" gap={1}>',
+    '    <icon name="check-circle-2" color="success" size="sm"/>',
+    '    <text size="xs">설치 없음</text>',
+    '  </row>',
+    '  <divider color="subtle"/>',
+    '  <caption>합성 예시 데이터입니다.</caption>',
+    '</box>',
+    '',
+    '인라인 코드 `<Cite ref="x"/>`는 그대로 둡니다. <MemoryCite />',
+    '',
+    '```jsx',
+    '<box><text>코드 안의 마크업</text></box>',
+    '```',
+  ].join('\n');
+  const msg = (id: string, role: string, content: unknown, extra: Record<string, unknown> = {}) => ({
+    id,
+    author: { role, name: extra.authorName ?? null },
+    create_time: t(20),
+    content,
+    metadata: extra.metadata ?? {},
+    recipient: extra.recipient ?? 'all',
+    channel: extra.channel ?? null,
+  });
+  const chain: Array<[string, unknown]> = [
+    ['u1', msg('u1', 'user', { content_type: 'text', parts: ['A와 B 중 무엇이 좋은지 조사해 줘.'] })],
+    ['web1', msg('web1', 'assistant', { content_type: 'code', text: '{"search_query":[{"q":"a vs b"}]}' }, { recipient: 'web.run' })],
+    ['webout1', msg('webout1', 'tool', { content_type: 'text', parts: [''] }, { authorName: 'web.run', metadata: { search_result_groups: [{ type: 'search_result_group', domain: 'example.org', entries: entries.slice(0, 3) }] } })],
+    [
+      'final',
+      msg('final', 'assistant', { content_type: 'text', parts: [answer] }, {
+        channel: 'final',
+        metadata: {
+          model_slug: 'gpt-6-thinking',
+          search_result_groups: [{ type: 'search_result_group', domain: 'mixed', entries }],
+          content_references: [{ matched_text: ' ', start_idx: answer.length, end_idx: answer.length + 1, type: 'sources_footnote', sources: [] }],
+        },
+      }),
+    ],
+  ];
+  const mapping: Record<string, unknown> = { root: node('root', null, [chain[0][0]], null) };
+  chain.forEach(([id, m], i) => {
+    mapping[id] = node(id, i === 0 ? 'root' : chain[i - 1][0], i + 1 < chain.length ? [chain[i + 1][0]] : [], m);
+  });
+  return { title: '조사', create_time: t(20), update_time: t(21), mapping, current_node: 'final', default_model_slug: 'gpt-6-thinking' };
+}

@@ -52,6 +52,9 @@ const html = (title: string, body: string, head = ''): MockResponse => ({
   body: `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`,
 });
 
+/** Toolbar shown under a finished ChatGPT answer (2026-10 structure, synthetic). */
+const ACTIONS_CHATGPT = '<div class="mt-1.5 flex turn-action-controls"><div class="flex min-h-5"><button aria-label="Copy">c</button><button aria-label="More actions">m</button></div></div>';
+
 /** Records which endpoints the extension called, for assertions. */
 export const calls: string[] = [];
 
@@ -65,7 +68,11 @@ export function route(req: MockRequest): MockResponse | null {
     if (u.pathname === `/c/${CHATGPT_ID}`) {
       return html(
         'Null 오류 분석 - ChatGPT',
-        '<main><div data-message-author-role="user"><div class="whitespace-pre-wrap">q1</div></div><div data-message-author-role="assistant"><div class="markdown"><p>a1</p></div></div><div data-message-author-role="user"><div class="whitespace-pre-wrap">q2</div></div><div data-message-author-role="assistant"><div class="markdown"><p>a2</p></div></div></main>',
+        '<main><div data-message-author-role="user"><div class="whitespace-pre-wrap">q1</div></div><div class="group/user-message"><div class="turn-action-controls"><div class="flex"><button aria-label="Edit">e</button></div></div></div><div data-message-author-role="assistant"><div class="markdown"><p>a1</p></div></div>' +
+          ACTIONS_CHATGPT +
+          '<div data-message-author-role="user"><div class="whitespace-pre-wrap">q2</div></div><div data-message-author-role="assistant"><div class="markdown"><p>a2</p></div></div>' +
+          ACTIONS_CHATGPT +
+          '</main>',
         '<script>document.cookie = "oai-did=e2e-device; path=/";</script>',
       );
     }
@@ -91,7 +98,7 @@ export function route(req: MockRequest): MockResponse | null {
     if (u.pathname === `/chat/${CLAUDE_ID}`) {
       return html(
         'React 컴포넌트 리팩터링 - Claude',
-        '<div data-testid="user-message">q</div><div class="font-claude-response">a</div><div data-testid="user-message">q2</div>',
+        '<div data-testid="user-message">q</div><div data-testid="assistant-message"><div class="font-claude-response">a</div><div data-testid="message-actions"><button aria-label="Copy">c</button></div></div><div data-testid="user-message">q2</div>',
         `<script>document.cookie = "lastActiveOrg=${CLAUDE_ORG}; path=/";</script>`,
       );
     }
@@ -108,7 +115,7 @@ export function route(req: MockRequest): MockResponse | null {
     if (u.pathname === `/app/${GEMINI_ID}`) {
       return html(
         'Gemini',
-        '<user-query>q1</user-query><model-response>a1</model-response><user-query>q2</user-query>',
+        '<user-query>q1</user-query><model-response>a1<message-actions><div class="buttons-container-v2"><button aria-label="Copy">c</button></div></message-actions></model-response><user-query>q2</user-query>',
         '<script>window.WIZ_global_data = {"SNlM0e":"e2e-at-token","FdrFJe":"-1234567890","cfb2h":"boq_assistant-bard-web-server_e2e"};</script>',
       );
     }
@@ -128,7 +135,11 @@ export function route(req: MockRequest): MockResponse | null {
   // ---------- Grok ----------
   if (u.host === 'grok.com') {
     const p = grokPayloads();
-    if (u.pathname === `/c/${GROK_ID}`) return html('날씨 API - Grok', '<div class="items-end"><div class="message-bubble">q</div></div>');
+    if (u.pathname === `/c/${GROK_ID}`) return html(
+        '날씨 API - Grok',
+        '<div id="response-u1" class="items-end"><div class="message-bubble">q</div><div class="action-buttons"><div class="flex"><button aria-label="Edit">e</button></div></div></div>' +
+          '<div id="response-a1" class="items-start"><div class="message-bubble">a</div><div class="action-buttons"><div class="flex"><button aria-label="Copy">c</button></div></div></div>',
+      );
     if (u.pathname === `/rest/app-chat/conversations_v2/${GROK_ID}`) return json(p.detail);
     if (u.pathname === `/rest/app-chat/conversations/${GROK_ID}/response-node`) return json(p.nodes);
     if (u.pathname === `/rest/app-chat/conversations/${GROK_ID}/load-responses` && req.method === 'POST') {

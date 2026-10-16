@@ -62,6 +62,8 @@ export interface ExportContent {
   imageGroup?: { images: ImageRef[] };
   attachment?: AttachmentRef;
   sources?: SourceRef[];
+  /** Search results the answer did not cite. Kept in JSON/ZIP only; documents list cited sources. */
+  moreSources?: SourceRef[];
 }
 
 export type Role = 'user' | 'assistant';

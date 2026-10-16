@@ -1,6 +1,7 @@
 // Isolated-world content script (tech doc §4): picks the adapter for the current site, collects
 // the full conversation and streams it to the service worker in chunks over a long-lived port.
-// It adds no UI to the page and does nothing until the extension asks for a conversation.
+// It also adds the small Lucian button under finished answers (page-ui.ts); collection itself
+// runs only when the user starts a job.
 
 import { COLLECT_PORT, type AssetRequest, type FromContent, type ToContent } from '../shared/messages';
 import { detectSite, extractConversationId } from '../shared/sites';
@@ -12,6 +13,7 @@ import { geminiAdapter } from './adapters/gemini';
 import { grokAdapter } from './adapters/grok';
 import { ExtractError, type AdapterContext, type SiteAdapter } from './adapters/types';
 import { Bridge } from './bridge';
+import { initPageUi } from './page-ui';
 
 declare global {
   interface Window {
@@ -36,6 +38,8 @@ if (!window.__lucianContentLoaded) {
   void bridge.handshake();
   let busy = false;
   let lastConversationId: string | null = null;
+  const pageSite = detectSite(location.href);
+  if (pageSite) initPageUi(ADAPTERS[pageSite]);
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === 'lucian-ping') {

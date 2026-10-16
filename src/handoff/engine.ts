@@ -6,12 +6,12 @@
 // recency, repetition) → track decisions / constraints / tasks → budgeted selection → render.
 
 import type { Conversation, HandoffStats, Role } from '../shared/types';
-import { estimateTokens, hangulRatio } from '../shared/util';
-import { messageBodyMarkdown } from '../export/markdown';
+import { cleanUrl, estimateTokens, hangulRatio, hostLabel, urlKey } from '../shared/util';
+import { messageBodyMarkdown, replaceOutsideCode } from '../export/markdown';
 import { clusterNearDuplicates, minhash } from './minhash';
-import { CODE_ERROR_RE, F, classify, extractCommands, extractPaths, extractUrls, jaccard, replacementPairs, topicTokens } from './patterns';
+import { CODE_ERROR_RE, F, bulletText, classify, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, replacementPairs, stripTracking, topicTokens } from './patterns';
 import { segmentMessage, type Unit } from './segment';
-import { renderHandoff, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage } from './render';
+import { renderHandoff, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
 
 export interface CacheEntry {
   flags: number;
@@ -203,11 +203,13 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
       if (f & F.GOAL) s += user ? 3 : 0.6;
       if (f & F.EMPHASIS) s += user ? 1.5 : 0.3;
       if (f & F.QUESTION) s += user ? 0.6 : 0;
+      if (f & F.LEAD && !user) s += 1;
+      if (f & F.PENDING) s += 1.2;
       if (f & F.POLITE) s -= 3;
       if (u.kind === 'heading') s += 0.5;
       if (u.kind === 'table') s += 0.8;
       const ents = extractPaths(u.text).length + extractCommands(u.text).length;
-      s += Math.min(2, ents * 0.8) + Math.min(0.8, extractUrls(u.text).length * 0.4);
+      s += Math.min(2, ents * 0.8) + Math.min(0.8, extractUrls(u.text.includes('](') ? bulletText(u.text) : u.text).length * 0.4);
       if (u.text.length < 8 && !(f & F.CONFIRM)) s -= 1;
       if (u.text.length > 600) s -= 0.5;
       if (user && repeats[i] > 1) s += Math.min(3, repeats[i] - 1);
@@ -263,19 +265,53 @@ function isProse(u: Unit): boolean {
   return u.kind !== 'code' && u.kind !== 'attachment';
 }
 
+/** Units that read well as one bullet line: sentences, list items, quotes (not tables or headings). */
+function isLine(u: Unit): boolean {
+  return u.kind === 'sentence' || u.kind === 'item' || u.kind === 'quote';
+}
+
+/** Visible text the user typed or the answer showed (no sources, thinking or tool output). */
+function messageText(msg: Conversation['messages'][number]): string {
+  return msg.contents
+    .filter((c) => c.type === 'text' || c.type === 'markdown')
+    .map((c) => c.content ?? '')
+    .join('\n')
+    .trim();
+}
+
+/** Body of one message for the transcript sections: no source lists, headings demoted below ours. */
+export function transcriptBody(msg: Conversation['messages'][number], lang: 'ko' | 'en'): string {
+  const body = messageBodyMarkdown({ ...msg, contents: msg.contents.filter((c) => c.type !== 'sources') }, { locale: lang });
+  // Message headings ("# 결론", "## 1. …") would otherwise read as sections of the handoff itself.
+  return replaceOutsideCode(body, (seg) =>
+    stripTracking(seg.replace(/^( {0,3})(#{1,6})(?=\s)/gm, (_, sp: string, h: string) => `${sp}${'#'.repeat(Math.min(6, h.length + 3))}`)),
+  );
+}
+
+const REQUEST_CHARS = 240;
+const LEAD_CHARS = 220;
+
+function clipLine(text: string, max: number): { text: string; clipped: boolean } {
+  const t = text.replace(/\s*\n\s*/g, ' ').trim();
+  return t.length > max ? { text: `${t.slice(0, max).trimEnd()}…`, clipped: true } : { text: t, clipped: false };
+}
+
 function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffDoc {
   const { units, flags, score, rep, repeats } = a;
   const N = conv.messages.length;
   const U = units.length;
   const used = new Set<number>();
   const usedKeys = new Set<number>();
+  // A unit and its (near-)duplicates are shown once in the whole document.
+  const usedClusters = new Set<number>();
   let uncertain = 0;
   const take = (i: number) => {
     used.add(i);
     usedKeys.add(units[i].key);
+    usedClusters.add(rep[i]);
   };
-  const isUsed = (i: number) => used.has(i) || usedKeys.has(units[i].key);
-  const item = (i: number, extra: Partial<Item> = {}): Item => ({ text: units[i].text, m: units[i].m, role: units[i].role, ...extra });
+  const isUsed = (i: number) => used.has(i) || usedKeys.has(units[i].key) || usedClusters.has(rep[i]);
+  const item = (i: number, extra: Partial<Item> = {}): Item => ({ text: bulletText(units[i].text) || units[i].text, m: units[i].m, role: units[i].role, ...extra });
   const tokensOf = new Map<number, string[]>();
   const topics = (i: number) => {
     let t = tokensOf.get(i);
@@ -285,6 +321,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     }
     return t;
   };
+  const unitsOf = (m: number) => Array.from({ length: ctx.msgUnitStart[m + 1] - ctx.msgUnitStart[m] }, (_, k) => ctx.msgUnitStart[m] + k);
+  const all = Array.from({ length: U }, (_, i) => i);
 
   const fullMode = ctx.sourceTokens <= FULL_MODE_TOKENS;
   const capBudget = fullMode ? MAX_BUDGET : handoffBudget(ctx.sourceTokens);
@@ -293,14 +331,49 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const MAX_OPEN = cap(500, 12, 50);
   const MAX_FAIL = cap(1500, 6, 20);
   const MAX_REQ = cap(600, 10, 40);
+  const MAX_REQUESTS = fullMode ? 60 : cap(400, 20, 60);
+  const MAX_LINKS = fullMode ? 20 : cap(800, 15, 40);
+  /** One long answer must not flood a section: at most this many items per assistant message. */
+  const PER_MESSAGE = 4;
+  // Token shares of the budget per section (compressed mode). Each section is filled by priority
+  // until its share is used, so the whole document stays near the budget instead of growing with
+  // every extra signal. Decisions and constraints are never cut by these shares.
+  const share = (f: number) => (fullMode ? Infinity : capBudget * f);
+  const lineTokens = (text: string, max = 220) => estimateTokens(text.length > max ? text.slice(0, max) : text) + 8;
+  /** Keeps the highest-priority indices (given in priority order) within maxTok; returns them in document order. */
+  const fit = (byPriority: number[], maxTok: number, max = 220) => {
+    let usedTok = 0;
+    const kept: number[] = [];
+    for (const i of byPriority) {
+      const t = lineTokens(units[i].text, max);
+      if (usedTok + t > maxTok) continue;
+      usedTok += t;
+      kept.push(i);
+    }
+    return kept.sort((x, y) => x - y);
+  };
 
-  // ---------- goal ----------
+  // Recent window (verbatim transcript) is decided first: the request flow adds the AI's lead
+  // sentence only for turns that are not already in the transcript.
+  let recentFrom = N;
+  if (fullMode) recentFrom = 0;
+  else {
+    const recentBudget = Math.max(2500, capBudget * 0.25);
+    let usedTok = 0;
+    for (let m = N - 1; m >= 0; m--) {
+      const tok = ctx.msgTokens[m];
+      const mustKeep = N - m <= 2;
+      if (!mustKeep && usedTok + Math.min(tok, 4000) > recentBudget) break;
+      usedTok += Math.min(tok, mustKeep ? 6000 : 4000);
+      recentFrom = m;
+    }
+  }
+
+  // ---------- goal: first request ----------
   const goal: Item[] = [];
   const firstUser = conv.messages.findIndex((m) => m.role === 'user');
   if (firstUser >= 0) {
-    const start = ctx.msgUnitStart[firstUser];
-    const end = ctx.msgUnitStart[firstUser + 1];
-    const firstUnits = Array.from({ length: end - start }, (_, k) => start + k).filter((i) => isProse(units[i]));
+    const firstUnits = unitsOf(firstUser).filter((i) => isProse(units[i]));
     const firstText = firstUnits.map((i) => units[i].text).join(' ');
     const picks = estimateTokens(firstText) <= 350 ? firstUnits : [...firstUnits].sort((x, y) => score[y] - score[x]).slice(0, 5).sort((x, y) => x - y);
     for (const i of picks) {
@@ -308,8 +381,90 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       take(i);
     }
   }
-  const laterGoals = Array.from({ length: U }, (_, i) => i)
-    .filter((i) => units[i].role === 'user' && units[i].m !== firstUser && flags[i] & F.GOAL && !(flags[i] & (F.PROHIBIT | F.CONSTRAINT)) && rep[i] === i && isProse(units[i]))
+
+  // ---------- request flow: every later user request, one line each ----------
+  // User turns carry the most information per token in a conversation, so they are listed in
+  // order. Long conversations keep the strongest requests plus the latest ones.
+  // Near-identical requests ("조금 더 설명해 주세요 (66)", "(67)"…) collapse into their latest
+  // occurrence with a count; the key is the duplicate cluster of the message's longest unit.
+  const userMsgs: number[] = [];
+  const similar = new Map<number, number>();
+  {
+    const latestByCluster = new Map<number, number>();
+    const clusterOf = new Map<number, number>();
+    for (let m = 0; m < N; m++) {
+      if (conv.messages[m].role !== 'user' || m === firstUser || !messageText(conv.messages[m])) continue;
+      const prose = unitsOf(m).filter((i) => isProse(units[i]));
+      if (!prose.length) continue;
+      const longest = prose.reduce((x, y) => (units[y].text.length > units[x].text.length ? y : x));
+      const key = prose.length <= 2 ? rep[longest] : -1 - m;
+      clusterOf.set(m, key);
+      latestByCluster.set(key, m);
+    }
+    const countByCluster = new Map<number, number>();
+    for (const key of clusterOf.values()) countByCluster.set(key, (countByCluster.get(key) ?? 0) + 1);
+    for (const [m, key] of clusterOf) {
+      if (latestByCluster.get(key) !== m) continue;
+      userMsgs.push(m);
+      const n = countByCluster.get(key) ?? 1;
+      if (n > 1) similar.set(m, n);
+    }
+    userMsgs.sort((x, y) => x - y);
+  }
+  let keptReq = userMsgs;
+  if (userMsgs.length > MAX_REQUESTS) {
+    const latest = new Set(userMsgs.slice(-12));
+    const msgScore0 = (m: number) => Math.max(0, ...unitsOf(m).map((i) => score[i]));
+    const rest = userMsgs.filter((m) => !latest.has(m)).sort((x, y) => msgScore0(y) - msgScore0(x)).slice(0, MAX_REQUESTS - latest.size);
+    const keep = new Set([...rest, ...latest]);
+    keptReq = userMsgs.filter((m) => keep.has(m));
+  }
+  const msgScore = (m: number) => Math.max(0, ...unitsOf(m).map((i) => score[i]));
+  let reqs0 = keptReq.map((m) => {
+    const { text, clipped } = clipLine(bulletText(messageText(conv.messages[m])), REQUEST_CHARS);
+    // The lead sentence of the answer gives the next AI the outcome of each turn in one line.
+    let leadIdx = -1;
+    const reply = m + 1 < N && conv.messages[m + 1].role === 'assistant' ? m + 1 : -1;
+    if (reply >= 0 && reply < recentFrom) {
+      const cand = unitsOf(reply).filter((i) => isLine(units[i]) && !(flags[i] & F.POLITE) && units[i].text.length >= 15);
+      leadIdx = cand.slice(0, 8).find((i) => flags[i] & F.LEAD) ?? cand[0] ?? -1;
+    }
+    return { m, text, clipped, leadIdx, reply };
+  });
+  {
+    const cost = (r: (typeof reqs0)[number]) => estimateTokens(r.text) + 8 + (r.leadIdx >= 0 ? lineTokens(units[r.leadIdx].text, LEAD_CHARS) : 0);
+    const limit = share(0.15);
+    let total = reqs0.reduce((a2, r) => a2 + cost(r), 0);
+    // Over the share: drop answer summaries of the oldest turns first, then the weakest requests.
+    for (const r of reqs0) {
+      if (total <= limit) break;
+      if (r.leadIdx >= 0) {
+        total -= lineTokens(units[r.leadIdx].text, LEAD_CHARS);
+        r.leadIdx = -1;
+      }
+    }
+    if (total > limit) {
+      const latest = new Set(reqs0.slice(-12).map((r) => r.m));
+      const drop = new Set<number>();
+      for (const r of [...reqs0].filter((x) => !latest.has(x.m)).sort((x, y) => msgScore(x.m) - msgScore(y.m))) {
+        if (total <= limit) break;
+        total -= cost(r);
+        drop.add(r.m);
+      }
+      reqs0 = reqs0.filter((r) => !drop.has(r.m));
+    }
+  }
+  const coveredMsgs = new Set<number>(firstUser >= 0 ? [firstUser] : []);
+  const requests: RequestItem[] = reqs0.map((r) => {
+    if (!r.clipped) coveredMsgs.add(r.m);
+    const repeatsN = similar.get(r.m);
+    if (r.leadIdx < 0) return { m: r.m, text: r.text, repeats: repeatsN };
+    take(r.leadIdx);
+    return { m: r.m, text: r.text, repeats: repeatsN, lead: { m: r.reply, text: clipLine(bulletText(units[r.leadIdx].text), LEAD_CHARS).text } };
+  });
+  const requestsOmitted = userMsgs.length - requests.length;
+  const laterGoals = all
+    .filter((i) => units[i].role === 'user' && !coveredMsgs.has(units[i].m) && flags[i] & F.GOAL && !(flags[i] & (F.PROHIBIT | F.CONSTRAINT)) && rep[i] === i && isLine(units[i]))
     .slice(-4);
   for (const i of laterGoals) if (!isUsed(i)) {
     goal.push(item(i));
@@ -327,7 +482,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const decs: Dec[] = [];
   for (let i = 0; i < U; i++) {
     const u = units[i];
-    if (!isProse(u) || rep[i] !== i) continue;
+    if (!isProse(u) || u.kind === 'table' || rep[i] !== i) continue;
     const f = flags[i];
     if (f & F.POLITE || f & F.QUESTION) continue;
     // A bare confirmation ("좋아요, 그걸로 하죠") is not itself a decision; the assistant
@@ -398,13 +553,13 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const cons: number[] = [];
   for (let i = 0; i < U; i++) {
     const u = units[i];
-    if (u.role !== 'user' || !isProse(u) || rep[i] !== i || isUsed(i)) continue;
+    if (u.role !== 'user' || !isProse(u) || u.kind === 'table' || rep[i] !== i || isUsed(i)) continue;
     const f = flags[i];
     if (f & F.QUESTION && !(f & F.PROHIBIT)) continue;
     if (f & F.PROHIBIT || (f & F.CONSTRAINT && (f & (F.EMPHASIS | F.DIRECTIVE)) !== 0) || (f & F.EMPHASIS && f & F.DIRECTIVE)) cons.push(i);
   }
   // Later permission on the same topic ("이제 React 써도 돼") marks a prohibition as uncertain.
-  const permits = Array.from({ length: U }, (_, i) => i).filter((i) => units[i].role === 'user' && flags[i] & F.PERMIT);
+  const permits = all.filter((i) => units[i].role === 'user' && flags[i] & F.PERMIT);
   // The same rule restated in different words ("절대 jQuery 쓰지 마" … "다시 말하지만 jQuery 금지")
   // is merged: the latest wording is shown with every place it was stated.
   const consGroups: number[][] = [];
@@ -431,9 +586,10 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       uncertain: later != null ? { m: units[later].m, kind: 'maybe-lifted' } : undefined,
     });
   });
-  // Directives from the user that are not constraints still matter (requirements).
-  const reqs = Array.from({ length: U }, (_, i) => i)
-    .filter((i) => units[i].role === 'user' && isProse(units[i]) && rep[i] === i && !isUsed(i) && flags[i] & F.DIRECTIVE && !(flags[i] & (F.QUESTION | F.ASK)))
+  // Other user instructions matter too, but those already quoted in full in the request flow are
+  // not repeated: only directives from long (clipped) or omitted requests are listed here.
+  const reqs = all
+    .filter((i) => units[i].role === 'user' && isLine(units[i]) && rep[i] === i && !isUsed(i) && !coveredMsgs.has(units[i].m) && flags[i] & F.DIRECTIVE && !(flags[i] & (F.QUESTION | F.ASK)))
     .sort((x, y) => score[y] - score[x])
     .slice(0, MAX_REQ)
     .sort((x, y) => x - y);
@@ -443,28 +599,86 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   });
 
   // ---------- tasks ----------
-  const doneIdx = Array.from({ length: U }, (_, i) => i).filter((i) => {
-    const f = flags[i];
-    return isProse(units[i]) && units[i].kind !== 'heading' && rep[i] === i && f & F.DONE && !(f & F.NOT_DONE) && !(f & F.QUESTION) && !(f & F.POLITE) && (units[i].checked !== false);
-  });
+  let lastUser = -1;
+  for (let m = N - 1; m >= 0; m--) if (conv.messages[m].role === 'user') {
+    lastUser = m;
+    break;
+  }
+  const lastAssistant = N - 1 >= 0 && conv.messages[N - 1].role === 'assistant' ? N - 1 : -1;
+  const assistantMsgs: number[] = [];
+  for (let m = 0; m < N; m++) if (conv.messages[m].role === 'assistant') assistantMsgs.push(m);
+  const recentAssistant = new Set(assistantMsgs.slice(-2));
+  const lastAssistantMsg = assistantMsgs[assistantMsgs.length - 1] ?? -1;
+  // "~해야 합니다" in an answer is usually advice, not pending work: assistant text counts as open
+  // only with explicit cues. Older answers count as completed work only with a strong verb
+  // (descriptions of other projects — "테마 12개를 만들었습니다" — are not the user's progress).
+  const ASSIST_TODO = /(남은|아직|추후|나중에|미완료|미구현|진행\s?중|할\s?일|예정|\bTODO\b|remaining|pending|not yet|still need|follow[- ]?up|later)/i;
+  const STRONG_DONE = /(완료|구현(했|함|하였|되었)|수정(했|함|하였|되었)|해결(했|됨|함|되었)|반영(했|함|하였|되었)|적용(했|함|하였|되었)|배포(했|함|하였)|고쳤|통과(했|함|하였)|\b(fixed|implemented|completed|deployed|resolved|merged|passed|shipped)\b|✅)/i;
   const isLabel = (i: number) => units[i].text.length <= 60 && /[:：]\s*$/.test(units[i].text);
-  const openIdx = Array.from({ length: U }, (_, i) => i).filter((i) => {
-    const f = flags[i];
-    if (!isProse(units[i]) || units[i].kind === 'heading' || rep[i] !== i || f & F.POLITE || isLabel(i)) return false;
-    if (units[i].checked === false) return true;
-    if (units[i].checked === true) return false;
-    return (f & F.TODO || f & F.NOT_DONE) && !(f & F.DONE && !(f & F.NOT_DONE));
-  });
-  const failMsgs = new Set<number>();
-  for (let i = 0; i < U; i++) if (flags[i] & F.FAILURE && isProse(units[i]) && units[i].role === 'user') failMsgs.add(units[i].m);
-  // Assistant text mentions "bug"/"error" in general explanations all the time; only keep it when
-  // it is concrete (code, identifiers, a stated cause) or answers a failure the user reported.
+  // Assistant text mentions "bug"/"error" or "should check…" in general explanations all the
+  // time; only keep it when it is concrete (code, identifiers, a stated cause) or recent.
   const concrete = (i: number) => /`[^`]+`|\w+(Error|Exception)\b|[A-Za-z_]+\(|\d{3}\b/.test(units[i].text) || (flags[i] & F.CAUSE) !== 0;
-  const failIdx = Array.from({ length: U }, (_, i) => i).filter((i) => {
+  const perMessage = (list: number[], limit: number) => {
+    const count = new Map<number, number>();
+    return [...list]
+      .sort((x, y) => score[y] - score[x])
+      .filter((i) => {
+        if (units[i].role === 'user') return true;
+        const n = count.get(units[i].m) ?? 0;
+        count.set(units[i].m, n + 1);
+        return n < limit;
+      })
+      .sort((x, y) => x - y);
+  };
+
+  // Next steps first: "남은 핵심은 …" in the latest answers belongs here rather than in open issues.
+  const next: Item[] = [];
+  const nextFrom = Math.max(0, N - 6);
+  for (let i = ctx.msgUnitStart[nextFrom]; i < U; i++) {
+    const u = units[i];
+    if (!isLine(u) || u.role !== 'assistant' || isUsed(i) || isLabel(i)) continue;
+    const f = flags[i];
+    if ((u.underNext && u.kind === 'item') || (f & F.NEXT && !(f & F.QUESTION)) || (u.kind === 'item' && u.checked === false)) {
+      if (!next.some((n) => n.text === bulletText(u.text))) next.push(item(i));
+    }
+  }
+  const nextTrim = next.slice(-15);
+  for (const it of nextTrim) {
+    const i = ctx.msgUnitStart[it.m] + unitsOf(it.m).findIndex((k) => bulletText(units[k].text) === it.text);
+    if (i >= 0) take(i);
+  }
+
+  const doneIdx = perMessage(
+    all.filter((i) => {
+      const f = flags[i];
+      if (!(isLine(units[i]) && rep[i] === i && !isUsed(i) && f & F.DONE && !(f & F.NOT_DONE) && !(f & F.QUESTION) && !(f & F.POLITE) && units[i].checked !== false)) return false;
+      return units[i].role === 'user' || units[i].m === lastAssistantMsg || STRONG_DONE.test(units[i].text) || units[i].checked === true;
+    }),
+    PER_MESSAGE,
+  );
+  const openIdx = perMessage(
+    all.filter((i) => {
+      const u = units[i];
+      const f = flags[i];
+      if (!isLine(u) || rep[i] !== i || isUsed(i) || f & F.POLITE || isLabel(i)) return false;
+      if (u.checked === false) return true;
+      if (u.checked === true) return false;
+      const pendingish = (f & (F.TODO | F.NOT_DONE | F.PENDING)) !== 0 && !(f & F.DONE && !(f & (F.NOT_DONE | F.PENDING)));
+      if (!pendingish) return false;
+      if (u.role === 'user') return !(f & F.QUESTION);
+      if (f & F.LEAD) return false; // a conclusion belongs to "current state"
+      if (!(f & (F.NOT_DONE | F.PENDING)) && !ASSIST_TODO.test(u.text)) return false;
+      return recentAssistant.has(u.m) || !!u.underNext || (f & F.PENDING) !== 0 || concrete(i);
+    }),
+    PER_MESSAGE,
+  );
+  const failMsgs = new Set<number>();
+  for (let i = 0; i < U; i++) if (flags[i] & F.FAILURE && isLine(units[i]) && units[i].role === 'user') failMsgs.add(units[i].m);
+  const failIdx = all.filter((i) => {
     if (rep[i] !== i) return false;
     const u = units[i];
     if (u.kind === 'code') return (flags[i] & F.FAILURE) !== 0;
-    if (!isProse(u) || u.kind === 'heading') return false;
+    if (!isLine(u)) return false;
     const f = flags[i];
     if (u.role === 'user') return (f & F.FAILURE) !== 0 || ((f & F.CAUSE) !== 0 && failMsgs.has(u.m));
     return (f & F.FAILURE) !== 0 && (concrete(i) || failMsgs.has(u.m - 1));
@@ -475,17 +689,13 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     for (const d of doneIdx) if (d > i && jaccard(topics(d), tt) >= 0.34) return d;
     return undefined;
   };
-  const done: Item[] = [...doneIdx]
-    .filter((i) => !isUsed(i))
-    .sort((x, y) => score[y] - score[x])
-    .slice(0, MAX_DONE)
-    .sort((x, y) => x - y)
+  const done: Item[] = fit([...doneIdx].sort((x, y) => score[y] - score[x]).slice(0, MAX_DONE), share(0.08))
     .map((i) => {
       take(i);
       return item(i);
     });
   const open: Item[] = [];
-  for (const i of openIdx) {
+  for (const i of fit([...openIdx].sort((x, y) => score[y] - score[x] || y - x), share(0.1))) {
     if (isUsed(i)) continue;
     const r = resolvedBy(i);
     if (r != null && jaccard(topics(r), topics(i)) >= 0.5) continue; // clearly completed later
@@ -494,50 +704,62 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     open.push(item(i, { uncertain: r != null ? { m: units[r].m, kind: 'maybe-done' } : undefined }));
   }
   const openTrim = open.length > MAX_OPEN ? open.slice(-MAX_OPEN) : open;
-  const failures: Item[] = failIdx
-    .filter((i) => !isUsed(i) && (units[i].kind !== 'code' || units[i].m >= N * 0.5))
-    .sort((x, y) => score[y] - score[x])
-    .slice(0, MAX_FAIL)
-    .sort((x, y) => x - y)
-    .map((i) => {
+  const failures: Item[] = fit(
+    perMessage(
+      failIdx.filter((i) => !isUsed(i) && (units[i].kind !== 'code' || units[i].m >= N * 0.5)),
+      PER_MESSAGE,
+    )
+      .sort((x, y) => score[y] - score[x])
+      .slice(0, MAX_FAIL),
+    share(0.05),
+    600,
+  ).map((i) => {
       take(i);
       const r = resolvedBy(i);
-      const text = units[i].kind === 'code' ? units[i].text.split('\n').filter((l) => l.trim()).slice(-12).join('\n') : units[i].text;
+      const text = units[i].kind === 'code' ? units[i].text.split('\n').filter((l) => l.trim()).slice(-12).join('\n') : bulletText(units[i].text);
       return { text, m: units[i].m, role: units[i].role, code: units[i].kind === 'code', resolved: r != null ? units[r].m : undefined };
     });
 
-  // ---------- current state & next steps ----------
-  let lastUser = -1;
-  for (let m = N - 1; m >= 0; m--) if (conv.messages[m].role === 'user') {
-    lastUser = m;
-    break;
-  }
-  const lastAssistant = N - 1 >= 0 && conv.messages[N - 1].role === 'assistant' ? N - 1 : -1;
+  // ---------- current state: key sentences of the last answer not shown elsewhere ----------
   const lastAssistantKey: Item[] = [];
   if (lastAssistant >= 0) {
-    const start = ctx.msgUnitStart[lastAssistant];
-    const end = ctx.msgUnitStart[lastAssistant + 1];
-    const idx = Array.from({ length: end - start }, (_, k) => start + k).filter((i) => isProse(units[i]) && !(flags[i] & F.POLITE));
-    const picked = [...idx].sort((x, y) => score[y] - score[x]).slice(0, 8).sort((x, y) => x - y);
-    for (const i of picked) lastAssistantKey.push(item(i));
-  }
-  const next: Item[] = [];
-  const nextFrom = Math.max(0, N - 6);
-  for (let i = ctx.msgUnitStart[nextFrom]; i < U; i++) {
-    const u = units[i];
-    if (!isProse(u) || u.role !== 'assistant') continue;
-    const f = flags[i];
-    if (isLabel(i) || u.kind === 'heading') continue;
-    if ((u.underNext && u.kind === 'item') || (f & F.NEXT && !(f & F.QUESTION)) || (u.kind === 'item' && u.checked === false)) {
-      if (!next.some((n) => n.text === u.text)) next.push(item(i));
+    const idx = unitsOf(lastAssistant).filter((i) => isLine(units[i]) && !(flags[i] & F.POLITE) && !isUsed(i) && !isLabel(i));
+    const weight = (i: number) => score[i] + (flags[i] & F.LEAD ? 2 : 0) + (/\*\*[^*]+\*\*/.test(units[i].text) ? 0.6 : 0);
+    const picked = [...idx].sort((x, y) => weight(y) - weight(x)).slice(0, 6).sort((x, y) => x - y);
+    for (const i of picked) {
+      take(i);
+      lastAssistantKey.push(item(i));
     }
   }
-  const nextTrim = next.slice(-15);
 
   // ---------- files, commands, links ----------
   const pathCount = new Map<string, { n: number; m: number }>();
   const cmdSet = new Map<string, number>();
-  const urlCount = new Map<string, { n: number; m: number; title?: string }>();
+  interface LinkAgg {
+    url: string;
+    title?: string;
+    w: number;
+    m: number;
+    msgs: Set<number>;
+  }
+  const linkMap = new Map<string, LinkAgg>();
+  const addLink = (url: string, title: string | undefined, m: number, weight: number) => {
+    const key = urlKey(url);
+    let e = linkMap.get(key);
+    if (!e) {
+      e = { url: cleanUrl(url), title, w: 0, m, msgs: new Set() };
+      linkMap.set(key, e);
+    }
+    // A descriptive title beats a bare host name ("shop.example" from a citation chip).
+    const weak = (t?: string) => !t || t === hostLabel(url) || /^[\w.-]+\.[a-z]{2,}$/i.test(t);
+    if (title && weak(e.title) && !weak(title)) e.title = title;
+    else if (!e.title && title) e.title = title;
+    e.m = Math.max(e.m, m);
+    if (!e.msgs.has(m)) {
+      e.msgs.add(m);
+      e.w += weight;
+    }
+  };
   for (let i = 0; i < U; i++) {
     const u = units[i];
     const text = u.kind === 'code' ? u.text.slice(0, 20_000) : u.text;
@@ -548,30 +770,25 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       const e = pathCount.get(p);
       pathCount.set(p, { n: (e?.n ?? 0) + 1, m: u.m });
     }
-    if (u.kind !== 'code') for (const url of extractUrls(text)) {
-      const e = urlCount.get(url);
-      urlCount.set(url, { n: (e?.n ?? 0) + 1, m: u.m });
-    }
+    // Links the user gave are the most reliable references; links in answers count once per message.
+    if (u.kind !== 'code') for (const l of extractLinks(text)) addLink(l.url, l.title, u.m, u.role === 'user' ? 3 : 1);
     if (u.title && /[\w-]+\.[a-z0-9]{1,6}$/i.test(u.title)) {
       const e = pathCount.get(u.title);
       pathCount.set(u.title, { n: (e?.n ?? 0) + 1, m: u.m });
     }
   }
+  // Cited sources (not the uncited search results) — documents list the same ones.
   conv.messages.forEach((msg, m) => {
-    for (const c of msg.contents) if (c.type === 'sources') for (const s of c.sources ?? []) {
-      const e = urlCount.get(s.url);
-      urlCount.set(s.url, { n: (e?.n ?? 0) + 1, m, title: s.title ?? e?.title });
-    }
+    for (const c of msg.contents) if (c.type === 'sources') for (const s of c.sources ?? []) addLink(s.url, s.title, m, 1);
   });
   const files = [...pathCount.entries()]
     .sort((x, y) => y[1].n - x[1].n || y[1].m - x[1].m)
     .slice(0, 40)
     .map(([path, v]) => ({ text: path, m: v.m, count: v.n }));
   const commands = [...cmdSet.entries()].slice(-25).map(([cmd, m]) => ({ text: cmd, m }));
-  const links = [...urlCount.entries()]
-    .sort((x, y) => y[1].n - x[1].n || y[1].m - x[1].m)
-    .slice(0, 40)
-    .map(([url, v]) => ({ text: url, m: v.m, title: v.title, count: v.n }));
+  const rankedLinks = [...linkMap.values()].sort((x, y) => y.w + y.m / Math.max(1, N) - (x.w + x.m / Math.max(1, N)));
+  const links = rankedLinks.slice(0, MAX_LINKS).map((l) => ({ text: l.url, m: l.m, title: l.title, count: l.msgs.size }));
+  const linksOmitted = Math.max(0, rankedLinks.length - links.length);
 
   // ---------- budgeted sections ----------
   const full = fullMode;
@@ -579,14 +796,15 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const fixedTokens = estimateTokens(
     [...goal, ...decisions, ...superseded, ...constraints, ...requirements, ...done, ...openTrim, ...nextTrim, ...failures, ...lastAssistantKey]
       .map((x) => x.text)
+      .concat(requests.map((r) => `${r.text} ${r.lead?.text ?? ''}`))
       .join('\n'),
   );
 
   // Code: latest version of each code cluster, highest scoring first, within ~30% of budget.
   const code: CodeItem[] = [];
   if (!full) {
-    const codeBudget = Math.max(1500, budget * 0.3);
-    const codeIdx = Array.from({ length: U }, (_, i) => i).filter((i) => units[i].kind === 'code' && rep[i] === i && !(units[i].title ?? '').startsWith('tool:'));
+    const codeBudget = Math.max(1500, budget * 0.25);
+    const codeIdx = all.filter((i) => units[i].kind === 'code' && rep[i] === i && !(units[i].title ?? '').startsWith('tool:'));
     let usedTok = 0;
     for (const i of [...codeIdx].sort((x, y) => score[y] - score[x])) {
       const u = units[i];
@@ -601,25 +819,11 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     code.sort((x, y) => x.m - y.m);
   }
 
-  // Recent raw messages (verbatim) — at least the last exchange, up to ~25% of the budget.
+  // Recent raw messages (verbatim), or the whole conversation when it is short.
   const recent: RecentMessage[] = [];
-  let recentFrom = N;
-  if (full) {
-    recentFrom = 0;
-  } else {
-    const recentBudget = Math.max(2500, budget * 0.25);
-    let usedTok = 0;
-    for (let m = N - 1; m >= 0; m--) {
-      const tok = ctx.msgTokens[m];
-      const mustKeep = N - m <= 2;
-      if (!mustKeep && usedTok + Math.min(tok, 4000) > recentBudget) break;
-      usedTok += Math.min(tok, mustKeep ? 6000 : 4000);
-      recentFrom = m;
-    }
-  }
   for (let m = recentFrom; m < N; m++) {
     const msg = conv.messages[m];
-    let body = messageBodyMarkdown(msg, { locale: ctx.lang });
+    let body = transcriptBody(msg, ctx.lang);
     const limit = full ? Infinity : N - m <= 2 ? 6000 : 4000;
     let clipped = false;
     if (estimateTokens(body) > limit) {
@@ -629,7 +833,9 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     recent.push({ m, role: msg.role, model: msg.model, time: msg.created_at, body, clipped });
   }
 
-  // Important past context: remaining budget filled with the best unused units before the recent window.
+  // Important past context: remaining budget filled with the best unused units before the recent
+  // window. Selection is relevance-ranked and redundancy-aware (MMR-style): a candidate whose topic
+  // words are already covered by what was selected adds little and is skipped.
   const past: PastItem[] = [];
   if (!full) {
     const used0 = fixedTokens + code.reduce((s, c) => s + estimateTokens(c.text), 0) + recent.reduce((s, r) => s + estimateTokens(r.body), 0);
@@ -639,14 +845,14 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     const focus = new Set<string>();
     const addFocus = (text: string) => topicTokens(text).forEach((t) => focus.add(t));
     for (let m = Math.max(0, N - 6); m < N; m++) if (conv.messages[m].role === 'user') {
-      for (let i = ctx.msgUnitStart[m]; i < ctx.msgUnitStart[m + 1]; i++) addFocus(units[i].text);
+      for (const i of unitsOf(m)) addFocus(units[i].text);
     }
     for (const it of [...openTrim, ...nextTrim, ...decisions, ...goal]) addFocus(it.text);
     const rel = new Map<number, number>();
     const cand: number[] = [];
     for (let i = 0; i < U; i++) {
       const u = units[i];
-      if (u.m >= recentFrom || !isProse(u) || rep[i] !== i || isUsed(i) || flags[i] & F.POLITE || u.text.length < 12) continue;
+      if (u.m >= recentFrom || !isProse(u) || u.kind === 'heading' || rep[i] !== i || isUsed(i) || flags[i] & F.POLITE || u.text.length < 12) continue;
       let r = 0;
       if (focus.size) {
         const tt = topics(i);
@@ -660,13 +866,21 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       }
     }
     cand.sort((x, y) => rel.get(y)! - rel.get(x)!);
+    const covered = new Map<string, number>();
     for (const i of cand) {
       if (remaining <= 0) break;
+      const tt = topics(i);
+      if (tt.length >= 4) {
+        let seen = 0;
+        for (const t of tt) if ((covered.get(t) ?? 0) >= 2) seen++;
+        if (seen / tt.length > 0.7) continue;
+      }
       const tok = estimateTokens(units[i].text) + 8;
       if (tok > remaining) continue;
       remaining -= tok;
       take(i);
-      past.push({ text: units[i].text, m: units[i].m, role: units[i].role });
+      for (const t of tt) covered.set(t, (covered.get(t) ?? 0) + 1);
+      past.push({ text: units[i].kind === 'table' ? units[i].text : bulletText(units[i].text), m: units[i].m, role: units[i].role, table: units[i].kind === 'table' });
     }
     past.sort((x, y) => x.m - y.m);
   }
@@ -679,6 +893,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     sourceTokens: ctx.sourceTokens,
     budget: full ? null : budget,
     goal,
+    requests,
+    requestsOmitted,
     decisions,
     superseded,
     constraints,
@@ -693,6 +909,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     files,
     commands,
     links,
+    linksOmitted,
     code,
     past,
     recent,

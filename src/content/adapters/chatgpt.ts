@@ -11,7 +11,7 @@ import type {
   SkippedNode,
   SourceRef,
 } from '../../shared/types';
-import { mapLimit, toEpochMs } from '../../shared/util';
+import { cleanUrl, hostLabel, mapLimit, toEpochMs, urlKey } from '../../shared/util';
 import { domFallbackExtract } from '../dom-fallback';
 import {
   ExtractError,
@@ -160,6 +160,127 @@ function stripCitationMarkers(text: string): string {
   return text.replace(/[^]*/g, '').replace(/[-]/g, '');
 }
 
+// ---------- citations and rich answer markup (chatgpt.com, 2026-10) ----------
+//
+// Search answers cite with `<Cite ref="turn123456search7"/>` or `<Cite refs={["…","…"]}/>`; the
+// ids match `metadata.search_result_groups[].entries[].ref_id` ({turn_index, ref_type, ref_index})
+// of the same conversation. Answers can also contain layout components that the UI renders:
+// `<Link url title/>`, `<box>`, `<row>`, `<text>`, `<title>`, `<caption>`, `<icon/>`, `<divider/>`.
+
+export interface CitedSource extends SourceRef {
+  label: string;
+}
+export type CitationIndex = Map<string, CitedSource>;
+
+const REF_TOKEN = /turn\d+[a-z_]+\d+/g;
+
+/** Collects every search result with a ref_id in the conversation (any node, visible or not). */
+export function buildCitationIndex(mapping: Record<string, ChatGPTNode>): CitationIndex {
+  const index: CitationIndex = new Map();
+  for (const node of Object.values(mapping)) {
+    for (const g of node.message?.metadata?.search_result_groups ?? []) {
+      for (const e of g?.entries ?? []) {
+        const r = e?.ref_id;
+        if (!r || typeof e.url !== 'string' || !/^https?:/i.test(e.url)) continue;
+        const key = `turn${r.turn_index}${r.ref_type}${r.ref_index}`;
+        if (!index.has(key)) index.set(key, { url: e.url, title: e.title || undefined, snippet: e.snippet || undefined, label: e.attribution || hostLabel(e.url) });
+      }
+    }
+  }
+  return index;
+}
+
+const LAYOUT_TAGS = new Set(['box', 'row', 'col', 'column', 'stack', 'grid', 'card']);
+const INLINE_TAGS = new Set(['text', 'caption', 'badge', 'label']);
+const VOID_TAGS = new Set(['icon', 'divider', 'spacer', 'separator']);
+const RICH_HINT = /<(?:Cite|Link|MemoryCite)\b|<(?:box|row|col|stack|card)\b[^>\n]*>/;
+
+function decodeEntities(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+function attr(attrs: string, name: string): string | undefined {
+  const m = attrs.match(new RegExp(`\\b${name}=(?:"([^"]*)"|'([^']*)'|\\{"([^"]*)"\\})`));
+  return m ? decodeEntities(m[1] ?? m[2] ?? m[3] ?? '') : undefined;
+}
+
+function citeLinks(refs: string[], index: CitationIndex | undefined, cited: CitedSource[]): string {
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const r of refs) {
+    const src = index?.get(r);
+    if (!src || seen.has(urlKey(src.url))) continue;
+    seen.add(urlKey(src.url));
+    cited.push(src);
+    links.push(`[${src.label.replace(/[[\]]/g, '')}](${cleanUrl(src.url)})`);
+  }
+  return links.length ? ` (${links.join(', ')})` : '';
+}
+
+/** Rewrites rich markup in a piece of one line (outside inline code) into plain Markdown. */
+function richLine(seg: string, index: CitationIndex | undefined, cited: CitedSource[]): string {
+  let s = seg;
+  s = s.replace(/[ \t]*<Cite\b([^>]*?)\/>/g, (_, attrs: string) => citeLinks(attrs.match(REF_TOKEN) ?? [], index, cited));
+  s = s.replace(/[ \t]*<MemoryCite\b[^>]*?\/>/g, '');
+  s = s.replace(/<Link\b([^>]*?)\/>/g, (_, attrs: string) => {
+    const url = attr(attrs, 'url') ?? attr(attrs, 'href');
+    if (!url) return '';
+    const title = (attr(attrs, 'title') ?? '').replace(/[[\]]/g, '').trim();
+    return `[${title || hostLabel(url)}](${cleanUrl(url)})`;
+  });
+  s = s.replace(/<Link\b([^>]*?)>([\s\S]*?)<\/Link>/g, (_, attrs: string, inner: string) => {
+    const url = attr(attrs, 'url') ?? attr(attrs, 'href');
+    const label = inner.replace(/[[\]]/g, '').trim();
+    return url ? `[${label || hostLabel(url)}](${cleanUrl(url)})` : inner;
+  });
+  s = s.replace(/<title\b[^>]*>([\s\S]*?)<\/title>/g, (_, inner: string) => (inner.trim() ? `**${inner.trim()}**` : ''));
+  s = s.replace(/<\/?([A-Za-z][\w-]*)\b[^<>]*?\/?>/g, (all, name: string) => {
+    if (LAYOUT_TAGS.has(name) || INLINE_TAGS.has(name) || VOID_TAGS.has(name) || name === 'title' || name === 'Link') return '';
+    // Unknown capitalized components are UI widgets without text of their own.
+    if (/^[A-Z]/.test(name)) return '';
+    return all;
+  });
+  return s;
+}
+
+/**
+ * Converts ChatGPT's rich answer markup to Markdown: citations become links to the cited pages,
+ * layout components are unwrapped and de-indented (so they do not turn into code blocks), and
+ * decorative components are dropped. Fenced and inline code are left untouched.
+ */
+export function convertRichMarkup(text: string, index?: CitationIndex): { text: string; cited: CitedSource[] } {
+  const cited: CitedSource[] = [];
+  if (!RICH_HINT.test(text)) return { text, cited };
+  const out: string[] = [];
+  let fence: string | null = null;
+  let depth = 0;
+  for (const raw of text.split('\n')) {
+    const trimmed = raw.trimStart();
+    if (fence) {
+      out.push(raw);
+      if (trimmed.startsWith(fence)) fence = null;
+      continue;
+    }
+    const open = trimmed.match(/^(`{3,}|~{3,})/);
+    if (open) {
+      fence = open[1];
+      out.push(depth > 0 ? trimmed : raw);
+      continue;
+    }
+    const line = depth > 0 ? trimmed : raw;
+    // Layout depth: opening tags that are not self-closing minus closing tags on this line.
+    for (const m of line.matchAll(/<(\/?)([a-z]+)\b[^<>]*?(\/?)>/g)) {
+      if (!LAYOUT_TAGS.has(m[2])) continue;
+      if (m[1]) depth = Math.max(0, depth - 1);
+      else if (!m[3]) depth++;
+    }
+    const parts = line.split(/(`+[^`\n]*?`+)/g);
+    const converted = parts.map((p, i) => (i % 2 === 1 ? p : richLine(p, index, cited))).join('');
+    out.push(converted.trim() ? converted.replace(/[ \t]+$/, '') : '');
+  }
+  return { text: out.join('\n').replace(/\n{3,}/g, '\n\n').trim(), cited };
+}
+
 interface RefResult {
   text: string;
   sources: SourceRef[];
@@ -167,10 +288,10 @@ interface RefResult {
 }
 
 /** Applies metadata.content_references so inline citation markers become readable links. */
-export function applyContentReferences(text: string, refs: Json[] | undefined): RefResult {
+export function applyContentReferences(text: string, refs: Json[] | undefined, index?: CitationIndex): RefResult {
   const sources: SourceRef[] = [];
   const images: ExportContent[] = [];
-  if (!Array.isArray(refs) || refs.length === 0) return { text: stripCitationMarkers(text), sources, images };
+  if (!Array.isArray(refs) || refs.length === 0) return { text: finishText(text, index, sources), sources, images };
 
   const pushSource = (s: Json) => {
     if (s && typeof s.url === 'string' && /^https?:/i.test(s.url)) {
@@ -210,16 +331,34 @@ export function applyContentReferences(text: string, refs: Json[] | undefined): 
       if (i >= 0) out = out.slice(0, i) + rep + out.slice(i + ref.matched_text.length);
     }
   }
-  return { text: stripCitationMarkers(out), sources, images };
+  return { text: finishText(out, index, sources), sources, images };
 }
 
-function dedupeSources(list: SourceRef[]): SourceRef[] {
-  const seen = new Set<string>();
-  return list.filter((s) => (seen.has(s.url) ? false : (seen.add(s.url), true)));
+/** Resolves citation markers left without a content reference, strips the rest, unwraps markup. */
+function finishText(text: string, index: CitationIndex | undefined, sources: SourceRef[]): string {
+  const cited: CitedSource[] = [];
+  const resolved = index?.size
+    ? text.replace(/\ue200cite\ue202([^\ue201]*)\ue201/g, (_, body: string) => citeLinks(body.match(REF_TOKEN) ?? [], index, cited))
+    : text;
+  const rich = convertRichMarkup(stripCitationMarkers(resolved), index);
+  for (const c of [...cited, ...rich.cited]) sources.push({ url: c.url, title: c.title, snippet: c.snippet });
+  return rich.text;
+}
+
+function dedupeSources(list: SourceRef[], exclude: Set<string> = new Set()): SourceRef[] {
+  const seen = new Set(exclude);
+  const out: SourceRef[] = [];
+  for (const s of list) {
+    const k = urlKey(s.url);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ ...s, url: cleanUrl(s.url) });
+  }
+  return out;
 }
 
 /** Converts one visible ChatGPT node to content blocks. Returns null when the node is empty. */
-export function convertNode(node: ChatGPTNode): { contents: ExportContent[]; rawHadContent: boolean } {
+export function convertNode(node: ChatGPTNode, index?: CitationIndex): { contents: ExportContent[]; rawHadContent: boolean } {
   const msg = node.message;
   const role = msg.author?.role;
   const content = msg.content ?? {};
@@ -279,27 +418,30 @@ export function convertNode(node: ChatGPTNode): { contents: ExportContent[]; raw
   // GPT-5 style "preamble" messages on the commentary channel are shown only inside the collapsed
   // thinking panel, so they are kept as thinking (JSON/ZIP) rather than as answer text.
   if (role === 'assistant' && ct === 'text' && (msg.channel === 'commentary' || meta.is_thinking_preamble_message)) {
-    const { text } = applyContentReferences(joined, meta.content_references);
+    const { text } = applyContentReferences(joined, meta.content_references, index);
     if (text.trim()) out.push({ type: 'thinking', title: 'commentary', content: text });
     return { contents: out, rawHadContent };
   }
 
   switch (ct) {
     case 'text': {
-      const { text, sources, images } = applyContentReferences(joined, meta.content_references);
+      const { text, sources, images } = applyContentReferences(joined, meta.content_references, index);
       if (text.trim()) out.push({ type: 'markdown', content: text });
       out.push(...images);
-      const extra: SourceRef[] = [...sources];
-      for (const g of meta.search_result_groups ?? []) for (const e of g.entries ?? []) if (e?.url) extra.push({ url: e.url, title: e.title, snippet: e.snippet });
-      for (const c of meta.citations ?? []) if (c?.metadata?.url) extra.push({ url: c.metadata.url, title: c.metadata.title });
-      const uniq = dedupeSources(extra);
-      if (uniq.length) out.push({ type: 'sources', sources: uniq });
+      // Documents list what the answer cites; the rest of the search results (often 100+ pages the
+      // model only looked at) is kept for JSON/ZIP as moreSources.
+      for (const c of meta.citations ?? []) if (c?.metadata?.url) sources.push({ url: c.metadata.url, title: c.metadata.title });
+      const cited = dedupeSources(sources);
+      const searched: SourceRef[] = [];
+      for (const g of meta.search_result_groups ?? []) for (const e of g.entries ?? []) if (e?.url) searched.push({ url: e.url, title: e.title, snippet: e.snippet });
+      const more = dedupeSources(searched, new Set(cited.map((x) => urlKey(x.url))));
+      if (cited.length || more.length) out.push({ type: 'sources', sources: cited, moreSources: more.length ? more : undefined });
       break;
     }
     case 'multimodal_text': {
       for (const p of parts) {
         if (typeof p === 'string') {
-          if (p.trim()) out.push({ type: 'markdown', content: stripCitationMarkers(p) });
+          if (p.trim()) out.push({ type: 'markdown', content: finishText(p, index, []) });
         } else if (p && typeof p === 'object') {
           const img = imageFromPart(p);
           if (img) out.push(img);
@@ -360,7 +502,7 @@ export function convertNode(node: ChatGPTNode): { contents: ExportContent[]; raw
       break;
     }
     default: {
-      if (joined.trim()) out.push({ type: 'markdown', content: stripCitationMarkers(joined) });
+      if (joined.trim()) out.push({ type: 'markdown', content: finishText(joined, index, []) });
       else if (typeof content.text === 'string' && content.text.trim()) {
         rawHadContent = true;
         out.push({ type: 'markdown', content: content.text });
@@ -377,7 +519,7 @@ interface PathConversion {
   skipped: SkippedNode[];
 }
 
-function convertPath(nodes: ChatGPTNode[]): PathConversion {
+function convertPath(nodes: ChatGPTNode[], index?: CitationIndex): PathConversion {
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
   const skipped: SkippedNode[] = [];
@@ -388,7 +530,7 @@ function convertPath(nodes: ChatGPTNode[]): PathConversion {
       if (cls.reason !== 'root') skipped.push({ id: node.id, reason: cls.reason });
       continue;
     }
-    const { contents, rawHadContent } = convertNode(node);
+    const { contents, rawHadContent } = convertNode(node, index);
     if (contents.length === 0) {
       if (rawHadContent) {
         visible++;
@@ -431,7 +573,8 @@ export function parseChatGPTConversation(data: Json, opts: ParseOptions): Conver
   const leafId = data.current_node && mapping[data.current_node] ? data.current_node : latestLeaf(mapping, rootId);
   if (!leafId) throw new ExtractError('EMPTY');
   const path = restoreConversationPath(mapping, rootId, leafId);
-  const main = convertPath(path);
+  const index = buildCitationIndex(mapping);
+  const main = convertPath(path, index);
 
   const otherBranchMessages: BranchMessages[] = [];
   if (opts.includeAllBranches !== false) {
@@ -441,7 +584,7 @@ export function parseChatGPTConversation(data: Json, opts: ParseOptions): Conver
       const bpath = restoreConversationPath(mapping, rootId, leaf);
       const div = bpath.findIndex((n) => !mainIds.has(n.id));
       if (div < 0) continue;
-      const conv = convertPath(bpath.slice(div));
+      const conv = convertPath(bpath.slice(div), index);
       if (!conv.messages.length) continue;
       otherBranchMessages.push({
         leafId: leaf,
@@ -571,6 +714,22 @@ export const chatgptAdapter: SiteAdapter = {
       document.querySelectorAll('[data-user-message-bubble]').length,
     );
     return n > 0 ? n : undefined;
+  },
+
+  actionBars() {
+    // 2026-10: each answer ends with `.turn-action-controls` > row of buttons; user bubbles have
+    // their own controls inside `group/user-message`. Older layout: copy-turn-action-button.
+    const bars: Element[] = [];
+    for (const c of document.querySelectorAll('.turn-action-controls')) {
+      if (c.closest('[class*="group/user-message"], [data-message-author-role="user"]')) continue;
+      bars.push([...c.children].find((k) => k.tagName === 'DIV' && k.querySelector('button')) ?? c);
+    }
+    if (!bars.length) {
+      for (const b of document.querySelectorAll('[data-testid="copy-turn-action-button"]')) {
+        if (!b.closest('[data-message-author-role="user"]') && b.parentElement) bars.push(b.parentElement);
+      }
+    }
+    return bars;
   },
 
   domFallback(ctx, conversationId) {

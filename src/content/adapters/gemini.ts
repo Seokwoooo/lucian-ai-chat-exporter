@@ -294,6 +294,10 @@ export const geminiAdapter: SiteAdapter = {
     return n > 0 ? n : undefined;
   },
 
+  actionBars() {
+    return [...document.querySelectorAll('model-response message-actions .buttons-container-v2')];
+  },
+
   domFallback(ctx, conversationId) {
     return domFallbackExtract('gemini', ctx, conversationId);
   },

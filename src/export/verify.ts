@@ -33,8 +33,10 @@ function contentStats(conv: Conversation) {
   let math = 0;
   let thinking = 0;
   let toolsClipped = 0;
+  let uncited = 0;
   for (const m of conv.messages) {
     for (const c of m.contents) {
+      if (c.type === 'sources') uncited += c.moreSources?.length ?? 0;
       if (c.type === 'tool' && (c.content?.length ?? 0) > TOOL_DOC_LIMIT) toolsClipped++;
       if (c.type === 'thinking') thinking++;
       else if (c.type === 'code' || c.type === 'tool' || c.type === 'artifact' || c.type === 'html_widget') codeBlocks++;
@@ -46,7 +48,7 @@ function contentStats(conv: Conversation) {
       }
     }
   }
-  return { tables, codeBlocks, math, thinking, toolsClipped };
+  return { tables, codeBlocks, math, thinking, toolsClipped, uncited };
 }
 
 export function buildVerification(
@@ -112,6 +114,9 @@ export function buildVerification(
     }
     if (format !== 'json' && cs.toolsClipped > 0) {
       checks.push({ code: 'tools.clipped', status: 'info', params: { n: cs.toolsClipped } });
+    }
+    if (format !== 'json' && cs.uncited > 0) {
+      checks.push({ code: 'sources.uncited', status: 'info', params: { n: cs.uncited } });
     }
 
     if (cs.math > 0) {

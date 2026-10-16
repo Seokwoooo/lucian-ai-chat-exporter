@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { conversationToMarkdown } from '../../src/export/markdown';
+import { buildVerification } from '../../src/export/verify';
 import { applyContentReferences, parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
 import { parseClaudeConversation, selectClaudePath } from '../../src/content/adapters/claude';
 import { buildGeminiConversation, extractReadChatPage, parseBatchExecute } from '../../src/content/adapters/gemini';
 import { cleanGrokMarkdown, parseGrokConversation } from '../../src/content/adapters/grok';
 import { extractConversationId, detectSite } from '../../src/shared/sites';
-import { CHATGPT_ID, CLAUDE_ID, GEMINI_ID, GROK_ID, chatgptConversation, chatgptModernConversation, claudeConversation, geminiPage, grokPayloads } from '../fixtures/sites';
+import { CHATGPT_ID, CLAUDE_ID, GEMINI_ID, GROK_ID, chatgptConversation, chatgptModernConversation, chatgptRichSearchConversation, claudeConversation, geminiPage, grokPayloads } from '../fixtures/sites';
 
 describe('site detection and conversation ids', () => {
   it('extracts ids from the supported URL shapes', () => {
@@ -65,6 +67,31 @@ describe('ChatGPT adapter', () => {
     expect(modern.extraction.missingNodeIds).toEqual([]);
   });
 
+  it('converts 2026-10 rich answer markup and lists only cited sources', () => {
+    const rich = parseChatGPTConversation(chatgptRichSearchConversation(), { conversationId: CHATGPT_ID, url: `https://chatgpt.com/c/${CHATGPT_ID}` });
+    expect(rich.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    const a = rich.messages[1];
+    const md = a.contents.find((c) => c.type === 'markdown')!.content!;
+    const outsideCode = md.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
+    expect(outsideCode).not.toMatch(/<\/?(Cite|Link|MemoryCite|box|row|text|title|caption|icon|divider)\b/);
+    expect(md).toContain('권장합니다.** 근거는 공식 문서입니다. ([example.org](https://example.org/one))');
+    expect(md).toContain('| [예시 A](https://example.org/a) | 설명 ([docs.example.com](https://docs.example.com/guide), [example.net](https://www.example.net/page/)) |');
+    expect(md).toContain('**무료 플랜 비교표**');
+    expect(md).toContain('\n설치 없음\n');
+    expect(md).toContain('합성 예시 데이터입니다.');
+    expect(md.split('\n').some((l) => /^ {4}\S/.test(l))).toBe(false);
+    expect(md).toContain('`<Cite ref="x"/>`');
+    expect(md).toContain('```jsx\n<box><text>코드 안의 마크업</text></box>\n```');
+    const src = a.contents.find((c) => c.type === 'sources')!;
+    expect(src.sources!.map((s) => s.url)).toEqual(['https://example.org/one', 'https://docs.example.com/guide', 'https://www.example.net/page/']);
+    expect(src.moreSources!.length).toBe(117);
+    expect(src.moreSources!.some((s) => s.url.includes('utm_source'))).toBe(false);
+    // Documents say that uncited results were left out; JSON keeps them without that note.
+    expect(buildVerification(rich, 'md').checks).toContainEqual({ code: 'sources.uncited', status: 'info', params: { n: 117 } });
+    expect(buildVerification(rich, 'json').checks.some((c) => c.code === 'sources.uncited')).toBe(false);
+    expect(conversationToMarkdown(rich, { locale: 'ko' }).text).not.toContain('search.example');
+  });
+
   it('strips unmatched private-use citation markers', () => {
     expect(applyContentReferences('acitexb', []).text).toBe('ab');
   });
@@ -122,7 +149,7 @@ describe('Grok adapter', () => {
     expect(conv.messages.map((m) => m.id)).toEqual(['g-u1', 'g-a1', 'g-u2', 'g-a2']);
     expect(conv.extraction.skipped).toEqual([{ id: 'g-a3-partial', reason: 'partial' }]);
     const a1 = conv.messages[1];
-    expect(a1.contents.find((c) => c.type === 'markdown')?.content).toContain('[[1]](https://openweathermap.org/api)');
+    expect(a1.contents.find((c) => c.type === 'markdown')?.content).toContain('([openweathermap.org](https://openweathermap.org/api))');
     expect(a1.contents.find((c) => c.type === 'thinking')).toBeTruthy();
     expect(conv.messages[3].contents.find((c) => c.type === 'image')?.imageUrl).toBe('https://assets.grok.com/users/u1/generated/img1/image.jpg');
     expect(conv.otherBranchMessages?.[0].messages[0].id).toBe('g-a2-old');

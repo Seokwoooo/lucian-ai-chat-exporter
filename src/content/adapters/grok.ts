@@ -3,7 +3,7 @@
 
 import { SITES } from '../../shared/sites';
 import type { BranchMessages, Conversation, ExportContent, ExportMessage, SkippedNode, SourceRef } from '../../shared/types';
-import { toEpochMs } from '../../shared/util';
+import { cleanUrl, hostLabel, toEpochMs, urlKey } from '../../shared/util';
 import { domFallbackExtract } from '../dom-fallback';
 import { ExtractError, cleanTitle, fetchJson, titleFromFirstUserMessage, type AdapterContext, type SiteAdapter } from './types';
 
@@ -19,13 +19,16 @@ function assetUrl(path: unknown): string | undefined {
   return ASSET_BASE + path.replace(/^\//, '');
 }
 
-/** Replaces Grok's inline citation markup with numbered links and strips UI-only tags. */
-export function cleanGrokMarkdown(text: string, results: SourceRef[]): string {
+/** Replaces Grok's inline citation markup with source links and strips UI-only tags. */
+export function cleanGrokMarkdown(text: string, results: SourceRef[], cited: Set<number> = new Set()): string {
   let out = text.replace(/<grok:render\b[^>]*>([\s\S]*?)<\/grok:render>/gi, (_m, inner: string) => {
     const id = inner.match(/<argument\s+name="citation_id">\s*(\d+)\s*<\/argument>/i)?.[1];
     if (id != null) {
       const src = results[Number(id)];
-      if (src?.url) return ` [[${Number(id) + 1}]](${src.url})`;
+      if (src?.url) {
+        cited.add(Number(id));
+        return ` ([${hostLabel(src.url)}](${cleanUrl(src.url)}))`;
+      }
     }
     return '';
   });
@@ -41,7 +44,8 @@ export function convertGrokResponse(r: Json): ExportContent[] {
     if (w?.url) results.push({ url: w.url, title: w.title, snippet: w.preview });
   }
   if (typeof r.thinkingTrace === 'string' && r.thinkingTrace.trim()) out.push({ type: 'thinking', content: r.thinkingTrace });
-  const text = typeof r.message === 'string' ? cleanGrokMarkdown(r.message, results).trim() : '';
+  const cited = new Set<number>();
+  const text = typeof r.message === 'string' ? cleanGrokMarkdown(r.message, results, cited).trim() : '';
   if (text) out.push({ type: r.sender === 'human' ? 'text' : 'markdown', content: text });
   for (const p of r.generatedImageUrls ?? []) {
     const url = assetUrl(p);
@@ -63,7 +67,15 @@ export function convertGrokResponse(r: Json): ExportContent[] {
       out.push({ type: 'attachment', attachment: { name: m?.fileName ?? String(id ?? 'file'), mime_type: mime, fileId: id, url: assetUrl(m?.fileUri) } });
     }
   }
-  if (results.length) out.push({ type: 'sources', sources: results });
+  // Documents list the cited results; the other search results stay in JSON/ZIP (moreSources).
+  if (results.length) {
+    const seen = new Set<string>();
+    const pick = (list: SourceRef[]) =>
+      list.filter((x) => (seen.has(urlKey(x.url)) ? false : (seen.add(urlKey(x.url)), true))).map((x) => ({ ...x, url: cleanUrl(x.url) }));
+    const sources = pick(results.filter((_, i) => cited.has(i)));
+    const more = pick(results.filter((_, i) => !cited.has(i)));
+    out.push({ type: 'sources', sources, moreSources: more.length ? more : undefined });
+  }
   return out;
 }
 
@@ -227,6 +239,17 @@ export const grokAdapter: SiteAdapter = {
   countDomUserTurns() {
     const bubbles = document.querySelectorAll('div[class*="items-end"] .message-bubble');
     return bubbles.length > 0 ? bubbles.length : undefined;
+  },
+
+  actionBars() {
+    // Assistant rows are `[id^=response-]` without `items-end` (user rows are right-aligned).
+    const bars: Element[] = [];
+    for (const row of document.querySelectorAll('[id^="response-"]')) {
+      if (row.classList.contains('items-end')) continue;
+      const bar = row.querySelector('.action-buttons');
+      if (bar) bars.push(bar.firstElementChild ?? bar);
+    }
+    return bars;
   },
 
   domFallback(ctx, conversationId) {

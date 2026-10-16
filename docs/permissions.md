@@ -7,7 +7,7 @@ Lucian AI Chat Exporter가 요청하는 권한과 그 이유입니다. 기능에
 | 권한 | 사용하는 곳 | 이유 |
 |---|---|---|
 | `storage` | `chrome.storage.session` (서비스 워커) | 진행 중인 작업의 상태(단계, 소요 시간, 검증 결과)를 저장합니다. 팝업을 닫았다 열어도 진행 상황이 보이게 하기 위한 것이며, 세션 저장소라 브라우저를 닫으면 사라집니다. 대화 본문이나 토큰은 넣지 않습니다. |
-| `downloads` | `chrome.downloads.download / search / show` | 만든 파일(인수인계 Markdown, PDF를 뺀 모든 내보내기 형식)을 저장하고, 저장이 끝났는지와 크기를 확인하고, “파일 위치 열기”를 지원합니다. |
+| `downloads` | `chrome.downloads.download / search / show / onDeterminingFilename` | 만든 파일(인수인계 Markdown, PDF를 뺀 모든 내보내기 형식)을 저장하고, 저장이 끝났는지와 크기를 확인하고, “파일 위치 열기”를 지원합니다. `onDeterminingFilename`은 **Lucian이 시작한 다운로드에만** 원래 파일 이름을 지정합니다. 다운로드 관리 확장이 이름을 가로채 blob UUID로 저장되는 문제를 막기 위한 것이며, 다른 다운로드에는 아무것도 하지 않습니다. |
 | `offscreen` | `chrome.offscreen.createDocument` | 서비스 워커에는 DOM과 Web Worker가 없습니다. 그래서 DOCX·HWPX·ZIP 생성과 인수인계 분석(Web Worker)을 화면에 보이지 않는 offscreen 문서에서 실행합니다. 덕분에 팝업을 닫아도 작업이 계속됩니다. |
 | `scripting` | `chrome.scripting.executeScript` | 확장을 설치·업데이트하기 전부터 열려 있던 AI 사이트 탭에는 콘텐츠 스크립트가 없습니다. 이런 탭에 확장 자신의 번들 파일(`content.js`, `inject.js`)만 주입합니다. 원격 코드는 주입하지 않습니다. |
 
@@ -30,7 +30,7 @@ Lucian AI Chat Exporter가 요청하는 권한과 그 이유입니다. 기능에
 | 파일 | 실행 위치 | 하는 일 |
 |---|---|---|
 | `inject.js` | 지원 사이트, `document_start`, **MAIN world** | 페이지가 서비스 서버로 보내는 요청의 헤더(ChatGPT 인증 헤더, Gemini `_reqid`·`x-goog-ext-*`, Grok `x-*`)를 **관찰만** 합니다. 확장이 같은 형식으로 대화를 요청할 수 있도록, 값은 그 탭의 메모리에만 둡니다. 요청 내용을 바꾸거나 막지 않습니다. |
-| `content.js` | 지원 사이트, `document_idle`, isolated world | 사용자가 팝업에서 버튼을 누를 때만 대화를 수집해 서비스 워커로 넘깁니다. 페이지에 UI를 추가하지 않습니다. |
+| `content.js` | 지원 사이트, `document_idle`, isolated world | 사용자가 버튼을 누를 때만 대화를 수집해 서비스 워커로 넘깁니다. 답변 아래 도구 막대(복사·다시 생성 버튼 옆)에 작은 Lucian 버튼 하나를 Shadow DOM으로 추가합니다. 사이트의 기존 버튼과 화면은 옮기거나 바꾸지 않으며, 버튼을 누르기 전에는 대화를 읽지 않습니다. |
 
 ## 쿠키 사용
 

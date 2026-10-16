@@ -38,6 +38,7 @@ suite also measures a 1M-token conversation end to end (`bench-results/e2e-chrom
 page MAIN world  src/inject/main-world.ts   observes fetch/XHR headers (ChatGPT auth, Gemini _reqid/x-goog-ext)
                                             → window.postMessage "web-bridge" (handshake, 30s timeout)
 content script   src/content/index.ts       picks the site adapter, collects, streams chunks over a Port
+  page button    src/content/page-ui.ts     Lucian button in each answer's toolbar (adapter.actionBars()) + panel
   adapters       src/content/adapters/*.ts  one file per site → common Conversation model (src/shared/types.ts)
   DOM fallback   src/content/dom-fallback.ts used only when the API path fails (reported as a warning)
 service worker   src/background/index.ts    job state (chrome.storage.session), assets, offscreen, downloads
@@ -61,12 +62,18 @@ popup            src/popup/*                two cards: handoff button, export fo
 - Site adapters must stay independent; keep selectors/indices in the adapter file so a site change
   is a one-file fix. Parsers are pure functions with fixture tests in `tests/adapters`.
 - Handoff output must be extractive: every line traceable to `[#mN]`; uncertain judgements are
-  marked ⚠️ rather than guessed. Update `tests/handoff/accuracy.test.ts` when changing heuristics.
+  marked ⚠️ rather than guessed. Update `tests/handoff/accuracy.test.ts` when changing heuristics,
+  and bump `CACHE_VERSION` (src/handoff/cache-codec.ts) whenever `classify()` changes.
+- Handoff noise rules: no uncited search results, no tracking params, a sentence appears in one
+  section only, tables/headings never become bullets, every section stays within its budget share.
 - User-facing strings go through `src/shared/i18n.ts` (Korean default, English supported).
 - Fixtures must be synthetic — never commit real conversations, cookies or tokens.
 - Site structures change: when a real-site check finds a new shape (e.g. ChatGPT `channel:
   "commentary"`, virtualized transcripts), add a synthetic fixture that mirrors it before fixing.
 - Documents show what the user saw: thinking is excluded (JSON/ZIP keep it), long tool output is
-  clipped to `TOOL_DOC_LIMIT` with a visible note; every such decision is reported in verification.
+  clipped to `TOOL_DOC_LIMIT` with a visible note, uncited search results go to `moreSources`
+  (JSON/ZIP only); every such decision is reported in verification.
+- The in-page button must not disturb the site: Shadow DOM only, append-only into the toolbar,
+  no reading of the conversation until the user clicks. Toolbar selectors live in `actionBars()`.
 - `scripts/build.mjs` strips the `new Function` branch from docx's bundled JSZip polyfill; CI fails
   if `eval`/`new Function` appears in `dist/`.

@@ -10,9 +10,11 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 [English](#english) · [설치](#설치) · [기능](#두-가지-기능) · [지원 범위](#지원-범위) · [개인정보](#개인정보) · [한계](#알려진-한계) · [개발](#개발)
 
-| 대화 화면에서 열었을 때 | 다른 형식 펼침 (다크 모드) | 지원하지 않는 페이지 |
+| 답변 아래 Lucian 버튼 | 툴바 팝업 | 다른 형식 펼침 (다크 모드) |
 |---|---|---|
-| ![팝업](docs/images/popup-handoff-done.png) | ![다크 모드](docs/images/popup-dark.png) | ![미지원](docs/images/popup-unsupported.png) |
+| ![답변 아래 버튼](docs/images/page-button-done.png) | ![팝업](docs/images/popup-handoff-done.png) | ![다크 모드](docs/images/popup-dark.png) |
+
+**두 곳에서 실행할 수 있습니다.** 답변이 끝나면 각 답변 아래 도구 막대(복사·다시 생성 버튼 옆)에 작은 Lucian 버튼이 나타나고, 브라우저 툴바의 Lucian 아이콘으로도 같은 기능을 엽니다. 어느 쪽에서 시작해도 같은 작업이며, 진행 상황과 결과가 양쪽에 보입니다.
 
 ---
 
@@ -22,11 +24,12 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 버튼 하나로 `lucian-handoff-2026-10-16.md` 같은 파일이 저장됩니다. 이 파일을 다른 AI(다른 서비스나 새 대화)에 첨부하면 그 AI가 작업을 바로 이어받을 수 있습니다.
 
-- 문서 맨 위에 **읽는 AI를 위한 안내문**이 있습니다. 이어서 기본 정보, 핵심 목표, 확정된 결정(최신 기준), 지시·제한·금지사항, 완료한 작업, 현재 상태, 미완료 문제, 다음 작업, 실패 원인, 핵심 코드·파일, 참고 링크, 최근 원문, 메시지 참조 색인 순으로 정리됩니다.
+- 문서 맨 위에 **읽는 AI를 위한 안내문**이 있습니다. 이어서 기본 정보, 목표와 요청 흐름(처음 요청 + 이후 요청을 시간순으로, 긴 대화는 각 답변의 요지 한 줄과 함께), 확정된 결정(최신 기준), 지시·제한·금지사항, 완료한 작업, 현재 상태, 미완료 문제, 다음 작업, 실패 원인, 핵심 코드·파일, 참고 링크, 원문(짧은 대화는 전체, 긴 대화는 최근) 순으로 정리됩니다. 내용이 없는 섹션은 넣지 않습니다.
 - **추출식 정리입니다.** LLM, 임베딩, 외부 API를 쓰지 않는 규칙 기반 TypeScript가 원문 문장을 그대로 발췌합니다. 그래서 없던 사실을 만들어 내지 않습니다. 모든 항목에는 원문 위치 `[#m12]`가 붙습니다.
 - 결정이 바뀌면 최신 결정을 우선하되, 이전 결정도 지우지 않고 남깁니다. 키워드만으로 바뀌었다고 단정하지 않고, 확신할 수 없는 항목은 ⚠️로 표시합니다.
-- 짧은 대화는 원문 전체를 포함하고, 긴 대화는 원문 분량의 약 12%(8k–32k 토큰)로 줄입니다.
-- 성능: 1M 토큰(3,782개 메시지) 대화의 문서 생성 시간이 **0.79초**입니다(데이터 확보 → Markdown 완료, Chrome 155, M2 Pro). 같은 대화를 다시 만들 때는 분석 캐시를 써서 **0.59초**입니다. 네트워크·수집·생성·저장 시간은 팝업에 따로 표시됩니다.
+- 짧은 대화는 원문 전체를 포함하고, 긴 대화는 원문 분량의 약 12%(8k–32k 토큰)로 줄입니다. 섹션마다 토큰 몫을 정해 중요도 순으로 채우므로 문서가 목표 분량을 크게 넘지 않습니다.
+- **잡음을 넣지 않습니다.** 웹 검색 답변에 딸린 수십~수백 개의 검색 결과 링크, 추적 파라미터(`utm_source` 등), 출처 칩, 서비스의 화면용 마크업은 빼고, 같은 문장은 한 섹션에만 넣습니다. 거의 같은 요청이 반복되면 한 줄로 묶고 횟수를 적습니다. 링크는 같은 페이지를 하나로 합쳐 많이 언급된 순으로 보여 줍니다.
+- 성능: 1M 토큰(3,782개 메시지) 대화의 문서 생성 시간이 **0.50초**입니다(데이터 확보 → Markdown 완료, Chrome 155, M2 Pro). 같은 대화를 다시 만들 때는 분석 캐시를 써서 **0.30초**입니다. 네트워크·수집·생성·저장 시간은 팝업에 따로 표시됩니다.
 
 ### 2. 전체 대화 내보내기
 
@@ -38,6 +41,7 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 - **HWPX**: 직접 생성한 OWPML 패키지입니다. 확장자만 바꾼 파일이 아니며, 공식 OWPML XSD 스키마 검증을 통과합니다.
 - **ZIP 전체 백업**: `conversation.md/html/json`, `images/`, `attachments/`, `verification-report.md/json`을 담습니다. 받지 못한 이미지·첨부는 보고서에 명시합니다.
 - 내보낼 때마다 **검증 결과**를 보여 줍니다. 원본 메시지 수 대비 추출 수, 이미지 포함 여부, 첨부 저장 여부, 수식 렌더링, 파일 무결성(ZIP·XML 파싱, 다운로드 크기 일치)을 확인하고, 빠진 것이 있으면 경고나 실패로 표시합니다.
+- 문서의 출처 목록에는 **답변이 실제로 인용한 출처**만 넣습니다. 검색만 하고 인용하지 않은 결과는 JSON·ZIP 백업에 보존하고, 그 사실을 검증 결과에 적습니다.
 - 팝업을 닫아도 작업은 계속됩니다(서비스 워커와 offscreen 문서에서 처리).
 
 ---
@@ -46,11 +50,13 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 ### 릴리스 ZIP으로 설치 (개발자 모드)
 
-1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.0.0.zip`을 받아 압축을 풉니다.
+1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.1.0.zip`을 받아 압축을 풉니다.
 2. Chrome 주소창에 `chrome://extensions`를 입력합니다.
 3. 오른쪽 위 **개발자 모드**를 켭니다.
 4. **압축해제된 확장 프로그램을 로드합니다**를 누르고, 압축을 푼 폴더(`manifest.json`이 있는 폴더)를 고릅니다.
-5. ChatGPT·Claude·Gemini·Grok의 대화 화면을 **새로고침**한 뒤 툴바의 Lucian 아이콘을 누릅니다.
+5. ChatGPT·Claude·Gemini·Grok의 대화 화면을 **새로고침**합니다. 답변 아래의 Lucian 버튼이나 툴바의 Lucian 아이콘을 누르면 됩니다.
+
+이전 버전에서 업데이트할 때는 `chrome://extensions`에서 Lucian의 새로고침(↻) 버튼을 누른 뒤, 열려 있던 대화 탭도 새로고침해 주세요.
 
 ### 소스에서 빌드
 
@@ -79,6 +85,7 @@ Chrome 116 이상이 필요합니다.
 | 사고 과정(Thinking) | JSON·ZIP에만 보존 | JSON·ZIP에만 보존 | ❌ 파싱 안 함 | JSON·ZIP에만 보존 |
 | 다른 답변 분기 | JSON·ZIP에 보존 | JSON·ZIP에 보존 | — | JSON·ZIP에 보존 |
 | 긴 대화 | ✅ | ✅ | ✅ 페이지 단위 수집 | ✅ |
+| 답변 아래 Lucian 버튼 | ✅ | ✅ (예전 답변은 마우스를 올렸을 때) | ✅ | ✅ |
 
 - ✅는 단위 테스트, 그리고 모의 사이트에 대한 E2E로 확인했다는 뜻입니다. 실제 서비스에서 무엇을 확인했는지는 [테스트 보고서](docs/test-report.md#6-실제-서비스-확인)에 정리했습니다.
 - 지원 사이트가 아닌 페이지에서는 버튼이 비활성화되고 안내가 표시됩니다.
@@ -108,6 +115,7 @@ Chrome 116 이상이 필요합니다.
 - Gemini의 사고 과정과 출처는 파싱하지 않습니다. 실제 계정에 10턴이 넘는 Gemini 대화가 없어서, 여러 페이지로 나뉜 Gemini 수집은 실제 데이터로 확인하지 못했습니다(모의 데이터로는 확인).
 - 긴 도구 출력(웹 페이지 본문, 명령 실행 로그 등)은 문서에 앞부분 2,000자만 넣습니다. 전체는 JSON·ZIP 백업에 있고, 검증 결과에도 표시됩니다.
 - 1M 토큰 대화의 DOCX 생성에는 약 7초가 걸립니다(Markdown 0.1초, HWPX 1초).
+- 다운로드 관리 확장 프로그램(Video DownloadHelper 등)은 다른 확장의 파일 이름을 바꾸기도 합니다. Lucian은 자기 다운로드의 이름을 직접 지정해 이를 막고, 그래도 바뀌면 검증 결과에 경고로 표시합니다. Lucian보다 나중에 설치한 다운로드 관리 확장이 이름을 덮어쓰면 막을 수 없습니다.
 
 ---
 
@@ -143,8 +151,10 @@ npm run package             # release/lucian-ai-chat-exporter-v<version>.zip (Ch
 
 **Lucian AI Chat Exporter** is a Chrome extension (Manifest V3) for ChatGPT, Claude, Gemini and Grok with exactly two features:
 
-1. **Handoff to another AI** — one click saves `lucian-handoff-YYYY-MM-DD.md`. It starts with instructions for the AI that reads it, followed by source info, the goal, confirmed decisions (latest first, older ones kept), instructions and constraints, completed work, current state, open problems, next steps, failure causes, key code and files, links, recent verbatim messages and a message reference index. It is **extractive and rule-based**: no LLM, no embeddings, no external API. Every line points back to `[#mN]`, and uncertain judgements are marked ⚠️ instead of guessed. A 1M-token conversation (3,782 messages) is processed in **0.79 s** (0.59 s with the incremental cache) inside Chrome.
+1. **Handoff to another AI** — one click saves `lucian-handoff-YYYY-MM-DD.md`. It starts with instructions for the AI that reads it, followed by source info, the goal and request flow (every later request in order, with a one-line gist of each answer in long chats), confirmed decisions (latest first, older ones kept), instructions and constraints, completed work, current state, open problems, next steps, failure causes, key code and files, links and the transcript (full for short chats, recent for long ones). Empty sections are left out. It is **extractive and rule-based**: no LLM, no embeddings, no external API. Every line points back to `[#mN]`, and uncertain judgements are marked ⚠️ instead of guessed. Noise is kept out: uncited search results, tracking parameters, citation chips and UI markup are dropped, each sentence appears in one section only, near-identical requests collapse into one line, and every section has a token share of the budget. A 1M-token conversation (3,782 messages) is processed in **0.50 s** (0.30 s with the incremental cache) inside Chrome.
 2. **Full export** — PDF (Chrome's print engine, locally), Markdown and Word. **More formats** adds real HWPX (OWPML, validated against the official XSD), HTML, TXT, JSON and a ZIP backup with images, attachments and a verification report. Each export is verified: source message count vs. exported, images, attachments, math, and file integrity. Gaps are reported, never hidden.
+
+Both features open from a small **Lucian button under every finished answer** (next to copy/retry) and from the toolbar icon. Documents list the sources an answer actually cited; uncited search results stay in the JSON/ZIP backup.
 
 **Install:** download the release ZIP → unzip → `chrome://extensions` → enable *Developer mode* → *Load unpacked* → select the folder → reload the chat page.
 

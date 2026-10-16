@@ -1,6 +1,6 @@
 # Chrome 웹 스토어 등록 정보 (초안)
 
-업로드 파일: `release/lucian-ai-chat-exporter-v1.0.0.zip` (`npm run package`로 생성, SHA-256은 같은 폴더의 `.sha256` 파일)
+업로드 파일: `release/lucian-ai-chat-exporter-v1.1.0.zip` (`npm run package`로 생성, SHA-256은 같은 폴더의 `.sha256` 파일)
 
 ## 기본 정보
 
@@ -16,13 +16,14 @@
 
 ## 상세 설명 (한국어)
 
-AI와 오래 작업한 대화를 다른 AI로 옮기거나, 문서로 보관해야 할 때 쓰는 도구입니다. 기능은 두 가지뿐입니다.
+AI와 오래 작업한 대화를 다른 AI로 옮기거나, 문서로 보관해야 할 때 쓰는 도구입니다. 기능은 두 가지뿐이고, 답변 아래의 작은 Lucian 버튼이나 툴바 아이콘에서 바로 실행합니다.
 
 ■ AI에게 인수인계하기
 버튼 하나로 현재 대화를 인수인계 문서(Markdown)로 저장합니다. 이 파일을 다른 AI에 첨부하면 바로 이어서 작업할 수 있습니다.
-• 목표, 확정된 결정(최신 기준), 지시·금지사항, 완료한 일, 현재 상태, 남은 문제, 다음 작업, 핵심 코드·파일을 정리합니다.
+• 목표와 요청 흐름, 확정된 결정(최신 기준), 지시·금지사항, 완료한 작업, 현재 상태, 남은 문제, 다음 작업, 핵심 코드·파일을 정리합니다.
+• 인용하지 않은 검색 결과 링크, 추적 파라미터, 화면용 마크업, 반복 문장은 넣지 않습니다.
 • 원문을 그대로 발췌하므로 없는 내용을 지어내지 않고, 모든 항목에 원문 위치가 붙습니다. 확실하지 않은 판단은 ⚠️로 표시합니다.
-• 100만 토큰 분량의 대화도 1초 안팎으로 처리합니다.
+• 100만 토큰 분량의 대화도 1초 안에 처리합니다.
 
 ■ 전체 대화 내보내기
 PDF, Markdown, Word(.docx)를 바로 고를 수 있습니다. “다른 형식 더 보기”를 누르면 한글(HWPX), HTML, TXT, JSON, ZIP 전체 백업도 나옵니다.
@@ -39,7 +40,7 @@ PDF, Markdown, Word(.docx)를 바로 고를 수 있습니다. “다른 형식 �
 
 ## Detailed description (English)
 
-Move a long AI conversation to another AI, or keep it as a proper document. Two features, nothing else.
+Move a long AI conversation to another AI, or keep it as a proper document. Two features, nothing else — started from a small Lucian button under each answer or from the toolbar icon.
 
 ■ Handoff to another AI — one click saves a handoff Markdown file with the goal, latest confirmed decisions, constraints, completed work, current state, open issues, next steps and key code. It is extractive: lines are quoted from the conversation with message references, and uncertain items are flagged. 1M-token conversations are processed in about a second.
 
@@ -58,7 +59,7 @@ Supported: chatgpt.com, claude.ai, gemini.google.com, grok.com.
 | 권한 | 사유 |
 |---|---|
 | storage | 진행 중인 내보내기 작업의 상태를 세션 저장소에 보관해, 팝업을 다시 열어도 진행 상황과 검증 결과를 보여 줍니다. |
-| downloads | 생성한 파일을 사용자의 다운로드 폴더에 저장하고, 저장 완료와 크기를 확인합니다. |
+| downloads | 생성한 파일을 사용자의 다운로드 폴더에 저장하고, 저장 완료와 크기를 확인합니다. 다운로드 관리 확장이 파일 이름을 바꾸지 않도록 이 확장이 시작한 다운로드에만 파일 이름을 지정합니다(onDeterminingFilename). |
 | offscreen | 서비스 워커에는 DOM과 Worker가 없으므로 문서 생성(DOCX/HWPX/ZIP)과 인수인계 분석을 offscreen 문서에서 실행합니다. 팝업을 닫아도 작업이 이어집니다. |
 | scripting | 확장 설치 전부터 열려 있던 지원 사이트 탭에 확장 자신의 콘텐츠 스크립트 파일을 주입합니다. |
 | 호스트 권한 (chatgpt.com, chat.openai.com, claude.ai, gemini.google.com, grok.com) | 사용자가 보고 있는 대화를 해당 서비스에서 가져옵니다. |

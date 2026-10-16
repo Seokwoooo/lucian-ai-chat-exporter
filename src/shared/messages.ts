@@ -28,8 +28,9 @@ export type FromContent =
   | { type: 'error'; code: string; message?: string };
 
 export type PopupRequest =
-  | { type: 'start-job'; kind: JobKind; format?: ExportFormat; tabId: number; locale: Locale }
-  | { type: 'get-job'; tabId: number }
+  /** tabId is omitted when the request comes from the in-page button (the sender's tab is used). */
+  | { type: 'start-job'; kind: JobKind; format?: ExportFormat; tabId?: number; locale: Locale }
+  | { type: 'get-job'; tabId?: number }
   | { type: 'show-download'; downloadId: number };
 
 export interface AssetStatus {

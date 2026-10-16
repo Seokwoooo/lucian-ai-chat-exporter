@@ -6,6 +6,8 @@ export type Locale = 'ko' | 'en';
 
 const ko = {
   'app.name': 'Lucian AI Chat Exporter',
+  'page.button': 'Lucian — AI 인수인계 · 대화 내보내기',
+  'page.close': '닫기',
   'handoff.title': 'AI에게 인수인계하기',
   'handoff.desc': '현재 대화의 핵심 맥락을 정리해 다른 AI에서 작업을 이어갈 수 있도록 합니다.',
   'handoff.button': '인수인계 Markdown 추출',
@@ -89,6 +91,7 @@ const ko = {
   'check.attachments.meta': '첨부파일 {total}개는 이름·형식 정보로 표시했습니다',
   'check.attachments.text': '첨부파일 {n}개는 서비스가 추출한 텍스트를 본문에 포함했습니다',
   'check.tools.clipped': '긴 도구 출력 {n}개는 문서에 앞부분만 넣었습니다 (전체는 JSON·ZIP 백업)',
+  'check.sources.uncited': '답변이 인용하지 않은 검색 결과 링크 {n}개는 문서에서 뺐습니다 (JSON·ZIP 백업에 보존)',
   'check.math.latex': '수식 {n}개는 LaTeX 원문으로 보존했습니다 (이 형식은 수식 개체를 만들지 않음)',
   'check.math.rendered': '수식 {n}개를 렌더링했습니다',
   'check.math.failed': '수식 {n}개는 렌더링에 실패해 LaTeX 원문으로 남겼습니다',
@@ -104,6 +107,7 @@ const ko = {
   'check.output.invalid': '생성된 파일의 구조 검증에 실패했습니다: {detail}',
   'check.download.ok': '다운로드 완료 ({size})',
   'check.download.mismatch': '저장된 파일 크기({saved})가 생성된 크기({expected})와 다릅니다',
+  'check.download.renamed': '다른 확장 프로그램이 파일 이름을 "{name}"(으)로 바꿨습니다 (원래 이름: {expected})',
   'check.pdf.print': 'PDF는 외부 서버 없이 Chrome 인쇄 엔진으로 생성됩니다. 저장 여부는 인쇄 창에서 확인하세요',
   'check.pdf.rendered': '인쇄용 문서에 메시지 {n}개를 렌더링했습니다',
   'check.handoff.full': '대화가 짧아 전체 원문을 그대로 포함했습니다',
@@ -142,6 +146,8 @@ export type MessageKey = keyof typeof ko;
 
 const en: Record<MessageKey, string> = {
   'app.name': 'Lucian AI Chat Exporter',
+  'page.button': 'Lucian — AI handoff · export conversation',
+  'page.close': 'Close',
   'handoff.title': 'Hand off to another AI',
   'handoff.desc': 'Condenses the key context of this chat so another AI can pick up the work.',
   'handoff.button': 'Extract handoff Markdown',
@@ -225,6 +231,7 @@ const en: Record<MessageKey, string> = {
   'check.attachments.meta': '{total} attachments are listed by name and type',
   'check.attachments.text': 'Text extracted by the service is included for {n} attachments',
   'check.tools.clipped': '{n} long tool outputs are shortened in the document (full text in JSON/ZIP backups)',
+  'check.sources.uncited': '{n} search-result links the answer did not cite were left out of the document (kept in the JSON/ZIP backup)',
   'check.math.latex': '{n} formulas are kept as LaTeX source (this format does not create equation objects)',
   'check.math.rendered': '{n} formulas rendered',
   'check.math.failed': '{n} formulas failed to render and were kept as LaTeX source',
@@ -240,6 +247,7 @@ const en: Record<MessageKey, string> = {
   'check.output.invalid': 'The generated file failed structural validation: {detail}',
   'check.download.ok': 'Download complete ({size})',
   'check.download.mismatch': 'Saved file size ({saved}) differs from generated size ({expected})',
+  'check.download.renamed': 'Another extension renamed the file to "{name}" (intended name: {expected})',
   'check.pdf.print': 'The PDF is produced locally by Chrome’s print engine; confirm saving in the print dialog',
   'check.pdf.rendered': 'Rendered {n} messages for printing',
   'check.handoff.full': 'The conversation is short, so the full transcript is included',

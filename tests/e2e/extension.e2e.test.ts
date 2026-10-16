@@ -153,12 +153,21 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       join(profile, 'Default', 'Preferences'),
       JSON.stringify({ download: { default_directory: downloads, prompt_for_download: false, directory_upgrade: true }, savefile: { default_directory: downloads } }),
     );
+    // A second extension that answers onDeterminingFilename for every download, like download
+    // managers (Video DownloadHelper…) do. With it installed Chrome ignored the filename given to
+    // chrome.downloads.download and saved blob downloads under their UUID (seen on a user's Chrome).
+    const manager = mkdtempSync(join(tmpdir(), 'lucian-dlmanager-'));
+    writeFileSync(
+      join(manager, 'manifest.json'),
+      JSON.stringify({ manifest_version: 3, name: 'Download manager (test)', version: '1.0', permissions: ['downloads'], background: { service_worker: 'dm.js' } }),
+    );
+    writeFileSync(join(manager, 'dm.js'), 'chrome.downloads.onDeterminingFilename.addListener((item, suggest) => { suggest({ filename: item.filename }); });\n');
     browser = await puppeteer.launch({
       executablePath: CHROME,
       headless: true,
       userDataDir: profile,
       // GitHub's Ubuntu runners restrict unprivileged user namespaces, which Chrome's sandbox needs.
-      args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`, '--no-first-run', '--no-default-browser-check', '--lang=ko-KR', ...(process.env.CI ? ['--no-sandbox'] : [])],
+      args: [`--disable-extensions-except=${manager},${DIST}`, `--load-extension=${manager},${DIST}`, '--no-first-run', '--no-default-browser-check', '--lang=ko-KR', ...(process.env.CI ? ['--no-sandbox'] : [])],
       defaultViewport: { width: 1280, height: 900 },
     });
     log('launched');
@@ -199,6 +208,58 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
     await popup.screenshot({ path: join(SHOTS, 'popup-unsupported.png') });
     await page.close();
   });
+
+  it('in-page button under finished answers starts a handoff on every site', async () => {
+    // One button per answer toolbar; user-message toolbars get none.
+    const expected = { chatgpt: 2, claude: 1, gemini: 1, grok: 1 } as const;
+    for (const site of ['chatgpt', 'claude', 'gemini', 'grok'] as const) {
+      const page = await browser.newPage();
+      await page.goto(PAGES[site], { waitUntil: 'load' });
+      await page.bringToFront();
+      await page.waitForSelector('[data-lucian-action]', { timeout: 10_000 });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(await page.$$eval('[data-lucian-action]', (els) => els.length), site).toBe(expected[site]);
+      const trigger = await page.waitForSelector('[data-lucian-action] >>> button');
+      await trigger!.click();
+      const primary = await page.waitForSelector('[data-lucian-panel] >>> .primary', { visible: true });
+      if (site === 'chatgpt') {
+        await new Promise((r) => setTimeout(r, 300)); // let the fade-in finish
+        const box = await page.$eval('[data-lucian-panel]', (h) => {
+          const r = h.shadowRoot!.querySelector('.panel')!.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        });
+        await page.screenshot({ path: join(SHOTS, 'page-button-panel.png'), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 72 } });
+      }
+      const t0 = Date.now();
+      await primary!.click();
+      const tabId = await tabIdFor(PAGES[site]);
+      const job = await waitJob(tabId, (j) => j.startedAt >= t0 - 50 && ['done', 'error'].includes(j.phase));
+      expect(job.phase, `${site}: ${JSON.stringify(job.error)}`).toBe('done');
+      expect(job.result?.filename, site).toMatch(/^lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
+      expect(job.result?.verification.checks.some((c) => c.code === 'download.renamed')).toBe(false);
+      expect(newestDownload('md', job.startedAt)).toMatch(/lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
+      // The panel reports the result itself.
+      await page.waitForFunction(
+        () => document.querySelector('[data-lucian-panel]')?.shadowRoot?.querySelector('.status .title')?.textContent?.includes('인수인계 파일을 저장했습니다'),
+        { timeout: 10_000 },
+      );
+      if (site === 'chatgpt') {
+        const box = await page.$eval('[data-lucian-panel]', (h) => {
+          const r = h.shadowRoot!.querySelector('.panel')!.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        });
+        await page.screenshot({ path: join(SHOTS, 'page-button-done.png'), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 32 } });
+      }
+      await page.keyboard.press('Escape');
+      expect(await page.$eval('[data-lucian-panel]', (h) => (h.shadowRoot!.querySelector('.panel') as HTMLElement).hidden)).toBe(true);
+      if (site === 'claude') {
+        // Hover-only toolbars: when the site removes its buttons, ours goes with them.
+        await page.evaluate(() => document.querySelector('[data-testid="message-actions"] button')!.remove());
+        await page.waitForFunction(() => !document.querySelector('[data-lucian-action]'), { timeout: 3000 });
+      }
+      await page.close();
+    }
+  }, 120_000);
 
   for (const site of ['chatgpt', 'claude', 'gemini', 'grok'] as const) {
     it(`${site}: handoff and every export format`, async () => {

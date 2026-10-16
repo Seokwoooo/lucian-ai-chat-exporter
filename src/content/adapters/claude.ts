@@ -316,6 +316,10 @@ export const claudeAdapter: SiteAdapter = {
     return n > 0 ? n : undefined;
   },
 
+  actionBars() {
+    return [...document.querySelectorAll('[data-testid="assistant-message"] [data-testid="message-actions"]')];
+  },
+
   domFallback(ctx, conversationId) {
     return domFallbackExtract('claude', ctx, conversationId);
   },

@@ -1,17 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { runHandoff } from '../../src/handoff/engine';
-import { englishScenario, koreanScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
+import { englishScenario, koreanScenario, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
 import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
 import { CHATGPT_ID, chatgptConversation } from '../fixtures/sites';
 
-/** Returns the body of the "## {prefix}…" section (until the next level-2 heading). */
-function section(md: string, prefix: string): string {
-  const start = md.indexOf(`\n## ${prefix}`);
-  if (start < 0) return '';
-  const rest = md.slice(start + 1);
+/**
+ * Returns the body of the "## N. {title}…" section (until the next level-2 heading). Sections are
+ * numbered in order and empty ones are left out, so tests look them up by title.
+ */
+function section(md: string, title: string): string {
+  const m = new RegExp(`\\n## \\d+\\. ${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).exec(md);
+  if (!m) return '';
+  const rest = md.slice(m.index + 1);
   const end = rest.indexOf('\n## ', 3);
   return end < 0 ? rest : rest.slice(0, end);
 }
+
+const DEC = '확정된 주요 결정';
+const CONS = '사용자 지시사항';
+const CODE = '핵심 코드';
+const DONE = '완료한 작업';
+const OPEN = '미완료 작업';
+const NEXT = '다음에 이어서 할 작업';
+const FAIL = '이전 시도에서 실패한 원인';
+const CUR = '현재 진행 상황';
 
 function subsection(text: string, prefix: string): string {
   const start = text.indexOf(`\n### ${prefix}`);
@@ -25,7 +37,7 @@ describe('handoff accuracy — Korean scenario (Electron → Tauri)', () => {
   const conv = koreanScenario();
   const r = runHandoff(conv, { now: Date.UTC(2026, 9, 16) });
   const md = r.markdown;
-  const decisions = section(md, '2.');
+  const decisions = section(md, DEC);
   const active = decisions.split('### ')[0];
   const superseded = subsection(decisions, '변경되거나');
 
@@ -46,31 +58,31 @@ describe('handoff accuracy — Korean scenario (Electron → Tauri)', () => {
   });
 
   it('preserves the prohibition and notes the repetition', () => {
-    const cons = section(md, '3.');
+    const cons = section(md, CONS);
     expect(cons).toMatch(/jQuery는 사용하지 마세요/);
     expect(cons).toMatch(/2회 반복 강조/);
   });
 
   it('lists important file paths and the latest code', () => {
-    const code = section(md, '9.');
+    const code = section(md, CODE);
     expect(code).toMatch(/src-tauri\/tauri\.conf\.json/);
     expect(code).toMatch(/src\/main\.rs/);
     expect(code).toMatch(/tauri::Builder/);
   });
 
   it('separates completed work from open work', () => {
-    expect(section(md, '4.')).toMatch(/초기 설정을 완료했습니다/);
-    const open = section(md, '6.') + section(md, '7.');
+    expect(section(md, DONE)).toMatch(/초기 설정을 완료했습니다/);
+    const open = section(md, OPEN) + section(md, NEXT);
     expect(open).toMatch(/자동 업데이트/);
     expect(open).toMatch(/코드 서명/);
   });
 
   it('records the failure cause', () => {
-    expect(section(md, '8.')).toMatch(/Xcode 명령줄 도구/);
+    expect(section(md, FAIL)).toMatch(/Xcode 명령줄 도구/);
   });
 
   it('shows the final user instruction as the current state', () => {
-    const cur = section(md, '5.');
+    const cur = section(md, CUR);
     expect(cur).toMatch(/자동 업데이트 기능을 구현해 주세요/);
     expect(md).toMatch(/https:\/\/updates\.example\.com\/memo/);
   });
@@ -90,7 +102,7 @@ describe('handoff accuracy — Korean scenario (Electron → Tauri)', () => {
 describe('handoff accuracy — English scenario (REST → GraphQL)', () => {
   const r = runHandoff(englishScenario(), { now: Date.UTC(2026, 9, 16) });
   const md = r.markdown;
-  const decisions = section(md, '2.');
+  const decisions = section(md, 'Confirmed decisions');
   const active = decisions.split('### ')[0];
 
   it('writes the document in English', () => {
@@ -105,26 +117,26 @@ describe('handoff accuracy — English scenario (REST → GraphQL)', () => {
   });
 
   it('keeps the Redux prohibition', () => {
-    expect(section(md, '3.')).toMatch(/never use Redux/i);
-    expect(section(md, '3.')).toMatch(/\[#m3\]/);
+    expect(section(md, 'User instructions')).toMatch(/never use Redux/i);
+    expect(section(md, 'User instructions')).toMatch(/\[#m3\]/);
   });
 
   it('carries next steps and the final instruction', () => {
-    expect(section(md, '7.')).toMatch(/ticket search resolver/);
-    expect(section(md, '5.')).toMatch(/implement the ticket search resolver now/);
+    expect(section(md, 'Next steps')).toMatch(/ticket search resolver/);
+    expect(section(md, 'Current state')).toMatch(/implement the ticket search resolver now/);
   });
 });
 
 describe('handoff accuracy — keyword overlap alone does not change decisions', () => {
   const r = runHandoff(unrelatedChangeScenario());
-  const decisions = section(r.markdown, '2.');
+  const decisions = section(r.markdown, DEC);
   it('keeps PostgreSQL active after an unrelated "change" request', () => {
     expect(decisions.split('### ')[0]).toMatch(/PostgreSQL로 결정/);
     expect(decisions).not.toMatch(/변경되거나 폐기된/);
   });
   it('uses full mode for a short conversation', () => {
     expect(r.stats.mode).toBe('full');
-    expect(r.markdown).toMatch(/## 11\. 전체 대화 원문/);
+    expect(r.markdown).toMatch(/## \d+\. 전체 대화 원문/);
   });
 });
 
@@ -150,6 +162,59 @@ describe('handoff — hidden reasoning', () => {
     for (const line of thinking.split('\n').map((l) => l.replace(/[*#]/g, '').trim()).filter((l) => l.length > 4)) {
       expect(markdown).not.toContain(line);
     }
-    expect(markdown).toMatch(/\| #m2 \| ChatGPT \| .+ \| 원인은/);
+    // Short conversation: everything is in the transcript, which shows the visible answer text.
+    expect(markdown).toMatch(/### \[#m2\] ChatGPT[\s\S]*?원인은 `user`가/);
+    expect(markdown).not.toMatch(/## 부록/);
   });
 });
+
+describe('handoff noise control — web-search research chat (user report, 2026-10)', () => {
+  const r = runHandoff(researchScenario(), { now: Date.UTC(2026, 9, 16) });
+  const md = r.markdown;
+  const transcript = md.slice(md.search(/\n## \d+\. 전체 대화 원문/));
+  const structured = md.slice(0, md.search(/\n## \d+\. 전체 대화 원문/));
+
+  it('drops uncited search results and source lists', () => {
+    expect(md).not.toContain('search0.example');
+    expect(md).not.toContain('검색 결과');
+    expect(transcript).not.toMatch(/\*\*(출처|Sources)\*\*/);
+    expect(md).not.toContain('utm_source');
+  });
+
+  it('lists each link once, with its title', () => {
+    const links = section(md, '참고 링크');
+    expect(links.match(/shop\.example\/a\)/g)?.length).toBe(1);
+    expect(links).toMatch(/\[앱 A( 요금제)?\]\(https:\/\/shop\.example\/a\)/);
+    expect(links).toMatch(/\[OpenThing\]\(https:\/\/github\.com\/example\/openthing\)/);
+  });
+
+  it('never flattens tables into bullet lines and strips citation chips from bullets', () => {
+    expect(structured).not.toMatch(/^- \|/m);
+    expect(structured).not.toMatch(/^- .*\(\[(shop|law)\.example\]/m);
+  });
+
+  it('shows a sentence in only one structured section', () => {
+    const bullets = structured.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.replace(/\s*\[#m\d+\].*$/, ''));
+    expect(new Set(bullets).size).toBe(bullets.length);
+  });
+
+  it('keeps message headings below the document outline and omits empty sections', () => {
+    expect(transcript).not.toMatch(/^#{1,3} (재배포|결론|유료)/m);
+    expect(transcript).toMatch(/^#### 재배포 조건에 대한 라이선스 조사/m);
+    expect(md).not.toContain('해당 내용을 찾지 못했습니다');
+    expect(section(md, '확정된 주요 결정')).toBe('');
+  });
+
+  it('lists the request flow, the open problem and the stated next step', () => {
+    const goal = section(md, '목표와 요청 흐름');
+    expect(goal).toMatch(/비슷한 오픈소스 있는지 찾아줘 \[#m3\]/);
+    expect(goal).toMatch(/라이선스 조건 찾아서 제대로 정리해줘 \[#m5\]/);
+    expect(section(md, '미완료 작업')).toMatch(/실제 약관 원문은 확보하지 못했습니다/);
+    expect(section(md, '다음에 이어서 할 작업')).toMatch(/남은 핵심은 저작권 표시 조건의 실제 원문 확인입니다/);
+    expect(section(md, '현재 진행 상황')).toMatch(/먼저 결론부터 말씀드리면/);
+    // Advice ("~확인해야 합니다") and descriptions of other projects are not the user's tasks.
+    expect(section(md, '미완료 작업')).not.toMatch(/동기화 제한도 확인해야 합니다/);
+    expect(section(md, '완료한 작업')).not.toMatch(/테마 12개를 자체 제작해 작성했습니다/);
+  });
+});
+

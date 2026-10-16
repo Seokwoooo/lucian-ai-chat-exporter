@@ -85,3 +85,83 @@ export function unrelatedChangeScenario(): Conversation {
     msg('assistant', '버튼 색상을 초록색으로 변경했습니다.'),
   ]);
 }
+
+/**
+ * Short research conversation shaped like a ChatGPT web-search session (2026-10): answers with
+ * headings, tables, citation chips and 100+ searched-but-uncited pages per answer. Mirrors the
+ * structure of a real handoff a user reported as noisy; all text and URLs are synthetic.
+ */
+export function researchScenario(): Conversation {
+  const chip = (host: string, path: string) => ` ([${host}](https://${host}/${path}))`;
+  const searched = (n: number, salt: string) =>
+    Array.from({ length: n }, (_, i) => ({ url: `https://search${i % 7}.example/${salt}/${i}?utm_source=chatgpt.com`, title: `검색 결과 ${i}` }));
+  const answer = (m: ExportMessage, salt: string, cited: Array<{ url: string; title: string }>) => {
+    m.contents.push({ type: 'sources', sources: cited, moreSources: searched(110, salt) });
+    return m;
+  };
+  return conv(
+    [
+      msg('user', '노트북에서 쓸 수 있는 유료 메모 앱 중 인기 있는 것들 정리해 줘'),
+      answer(
+        msg(
+          'assistant',
+          [
+            '대표적으로 **앱 A, 앱 B, 앱 C**가 있습니다.' + chip('shop.example', 'a'),
+            '',
+            '## 유료 앱 목록',
+            '',
+            '| 앱 | 가격 |',
+            '|---|---|',
+            '| [앱 A](https://shop.example/a?utm_source=chatgpt.com) | 9,900원 |',
+            '| [앱 B](https://shop.example/b) | 15,000원 |',
+            '',
+            '유료 플랜은 기기 수와 동기화 제한도 확인해야 합니다.',
+          ].join('\n'),
+        ),
+        'a',
+        [{ url: 'https://shop.example/a', title: '앱 A 요금제' }],
+      ),
+      msg('user', '앱 A랑 비슷한 오픈소스 있는지 찾아줘'),
+      answer(
+        msg(
+          'assistant',
+          [
+            '## 결론: 오픈소스 대안이 있습니다.',
+            '',
+            '| 프로젝트 | 내용 | 판단 |',
+            '|---|---|---|',
+            '| [OpenThing](https://github.com/example/openthing) | 플러그인 120개 | 가장 유용함 |',
+            '| [OtherThing](https://github.com/example/other) | 동기화 서버 포함 | 라이선스 확인 필요 |',
+            '',
+            '저장소의 루트 `LICENSE` 파일은 확인되지 않았습니다.',
+            '그 프로젝트는 테마 12개를 자체 제작해 작성했습니다.',
+          ].join('\n'),
+        ),
+        'b',
+        [{ url: 'https://github.com/example/openthing', title: 'OpenThing' }],
+      ),
+      msg('user', '라이선스 조건 찾아서 제대로 정리해줘'),
+      answer(
+        msg(
+          'assistant',
+          [
+            '# 재배포 조건에 대한 라이선스 조사',
+            '',
+            '**먼저 결론부터 말씀드리면, 개인 사용과 상업적 재배포는 구분해야 합니다.**' + chip('law.example', 'x'),
+            '',
+            '| 항목 | 내용 |',
+            '|---|---|',
+            '| 라이선스 | EXAMPLE-1.0 |',
+            '',
+            '공식 문서 페이지는 열렸으나 실제 약관 원문은 확보하지 못했습니다.',
+            '',
+            '남은 핵심은 저작권 표시 조건의 실제 원문 확인입니다.',
+          ].join('\n'),
+        ),
+        'c',
+        [{ url: 'https://law.example/x', title: '법령' }],
+      ),
+    ],
+    '유료 메모 앱 비교',
+  );
+}

@@ -45,6 +45,11 @@ export interface SiteAdapter {
   domFallback(ctx: AdapterContext, conversationId: string): Promise<Conversation>;
   /** Turns a service-specific file reference into a downloadable URL. */
   resolveAssetUrl?(req: AssetResolveRequest, conversationId: string, ctx: AdapterContext): Promise<string | undefined>;
+  /**
+   * Action toolbars under finished assistant answers (copy, retry…) where the in-page Lucian button
+   * is added. The site renders them only once an answer is complete.
+   */
+  actionBars(): Element[];
 }
 
 export interface FetchJsonOptions extends RequestInit {

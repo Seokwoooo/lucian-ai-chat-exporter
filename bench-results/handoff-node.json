@@ -6,7 +6,7 @@
     "platform": "darwin 27.0.0",
     "node": "v26.5.0",
     "v8": "14.6.202.34-node.24",
-    "date": "2026-10-16T09:59:08.230Z"
+    "date": "2026-10-16T14:04:59.134Z"
   },
   "results": [
     {
@@ -15,18 +15,18 @@
       "messages": 381,
       "chars": 285341,
       "cold": {
-        "totalMs": 105,
+        "totalMs": 97,
         "normalizeMs": 11,
-        "dedupeMs": 36,
-        "scoreMs": 44,
-        "renderMs": 13
+        "dedupeMs": 37,
+        "scoreMs": 38,
+        "renderMs": 12
       },
       "warm": {
-        "totalMs": 49,
+        "totalMs": 37,
         "cacheHits": 2442,
         "cacheMisses": 1
       },
-      "outputTokens": 15084,
+      "outputTokens": 14382,
       "heapDeltaMB": 8
     },
     {
@@ -35,19 +35,19 @@
       "messages": 3783,
       "chars": 2844268,
       "cold": {
-        "totalMs": 870,
-        "normalizeMs": 71,
-        "dedupeMs": 250,
-        "scoreMs": 547,
+        "totalMs": 561,
+        "normalizeMs": 69,
+        "dedupeMs": 244,
+        "scoreMs": 247,
         "renderMs": 1
       },
       "warm": {
-        "totalMs": 648,
+        "totalMs": 335,
         "cacheHits": 24547,
         "cacheMisses": 1
       },
-      "outputTokens": 36402,
-      "heapDeltaMB": 26
+      "outputTokens": 33491,
+      "heapDeltaMB": 23
     }
   ]
 }

@@ -1,3 +1,5 @@
+import { cleanUrl } from '../shared/util';
+
 // Rule-based detectors for Korean and English chat text. No model is involved: every flag comes
 // from an explicit pattern so results are explainable and deterministic.
 
@@ -22,6 +24,10 @@ export const F = {
   PROHIBIT: 1 << 17,
   /** Request for information/explanation rather than a requirement. */
   ASK: 1 << 18,
+  /** Conclusion / summary sentence ("결론부터 말하면", "In short"). */
+  LEAD: 1 << 19,
+  /** Explicitly unfinished work ("아직 구현하지 못했습니다", "TODO", "not yet implemented"). */
+  PENDING: 1 << 20,
 } as const;
 
 const KO = {
@@ -35,10 +41,12 @@ const KO = {
   change:
     /(아니(라|고|요|야)?[,.\s]|아닌|말고|대신(에)?|바꾸|바꿔|변경|정정|취소|철회|오히려|틀렸|잘못|번복|폐기|되돌|원복|다시\s?(하|해|만들|구현))/,
   done:
-    /(완료(했|됐|되었|함|입니다|하였)?|끝났|끝냈|마쳤|구현(했|함|완료|하였|되었)|추가(했|함|하였|되었)|수정(했|함|하였|완료|되었)|해결(했|됨|함|되었)|성공(했|함|하였)|작성(했|함|하였)|적용(했|함|하였|되었)|통과(했|함|하였)|반영(했|함|하였|되었)|생성(했|함|하였|되었)|배포(했|함|하였)|고쳤|만들었|되었습니다|됐습니다|했습니다|하였습니다)/,
+    /(완료(했|됐|되었|함|입니다|하였)?|끝났|끝냈|마쳤|구현(했|함|완료|하였|되었)|추가(했|함|하였|되었)|수정(했|함|하였|완료|되었)|해결(했|됨|함|되었)|성공(했|함|하였)|작성(했|함|하였)|적용(했|함|하였|되었)|통과(했|함|하였)|반영(했|함|하였|되었)|생성(했|함|하였|되었)|배포(했|함|하였)|고쳤|만들었|찾았|되었습니다|됐습니다|했습니다|하였습니다)/,
   notDone: /(완료(되지|하지)\s?(않|못)|아직\s?(완료|안|못|구현)|못\s?했|안\s?됐|되지\s?않았|하지\s?못)/,
   todo: /(해야\s?할|해야\s?합니다|남은|남아\s?있|아직|다음\s?(단계|작업|으로|에는|할\s?일)|추후|나중에|미완료|미구현|진행\s?중|할\s?일|예정|계획|이어서|계속해서|우선순위)/,
-  next: /(다음\s?(단계|작업|할\s?일|으로|순서)|이어서\s?(할|진행)|남은\s?작업|앞으로)/,
+  next: /(다음\s?(단계|작업|할\s?일|으로|순서)|이어서\s?(할|진행)|남은\s?(핵심|작업|일|과제|단계|문제|확인)|앞으로|후속\s?(작업|조치|확인))/,
+  lead: /(결론(부터|은|적으로|:)|요약(하면|하자면|:)|정리(하면|하자면)|핵심(은|만)|최종\s?(판단|판정|결론|정리|추천)|한\s?줄\s?요약)/,
+  pending: /(미완료|미구현|아직\s?(구현|완료|테스트|확인|적용|반영|처리|작성|수정|해결)(하지|되지|을|를|이|가)?\s?(못|안|않)|구현(하지|되지)\s?(못|않)|완료(하지|되지)\s?(못|않))/,
   failure:
     /(오류|에러|실패|안\s?(돼|됨|되네|된다|되요|돼요)|작동(하지|안\s?하|을\s?안)|동작(하지|안)|문제(가|는|점)|버그|충돌|깨(짐|져|졌)|예외\s?발생|크래시|멈춤|타임아웃|먹통|누락)/,
   cause: /(원인|때문|이유는|이유가|탓)/,
@@ -63,7 +71,9 @@ const EN = {
   done: /\b(done|completed?|finished|implemented|fixed|resolved|added|created|works now|passed|merged|deployed|shipped|updated|refactored)\b|✅/i,
   notDone: /\b(not (yet )?(done|finished|implemented|fixed|working|complete)|didn'?t|failed to|isn'?t done)\b/i,
   todo: /\b(todo|to-do|to do|next steps?|next,|remaining|pending|not yet|still need|later|follow[- ]up|in progress|wip|plan to|will need|should also|outstanding|backlog)\b/i,
-  next: /\b(next steps?|next,|next up|going forward|remaining work|then we|after that)\b/i,
+  next: /\b(next steps?|next,|next up|going forward|remaining work|still need to|what'?s left|then we|after that)\b/i,
+  lead: /\b(in summary|in short|tl;?dr|bottom line|to summarize|the short answer|conclusion:?|overall,)/i,
+  pending: /\b(todo|not (yet )?(implemented|done|finished|tested|verified|working)|still (missing|failing|pending)|unfinished|incomplete)\b/i,
   failure:
     /\b(error|exception|failed|failure|fails|failing|broken|bug|crash(es|ed)?|doesn'?t work|does not work|not working|traceback|stack trace|undefined is not|cannot|can'?t|timeout|timed out|regression)\b/i,
   cause: /\b(because|caused by|root cause|due to|the reason)\b/i,
@@ -98,6 +108,8 @@ export function classify(text: string, role: 'user' | 'assistant'): number {
   if (KO.recommend.test(t) || EN.recommend.test(t)) f |= F.RECOMMEND;
   if (KO.permit.test(t) || EN.permit.test(t)) f |= F.PERMIT;
   if (KO.ask.test(t) || EN.ask.test(t)) f |= F.ASK;
+  if (KO.lead.test(t) || EN.lead.test(t)) f |= F.LEAD;
+  if (KO.pending.test(t) || EN.pending.test(t)) f |= F.PENDING;
   const trimmed = t.trim();
   if (role === 'user' && trimmed.length <= 60 && (KO.confirm.test(trimmed) || EN.confirm.test(trimmed))) f |= F.CONFIRM;
   if (role === 'assistant' && (KO.polite.test(trimmed) || EN.polite.test(trimmed))) f |= F.POLITE;
@@ -124,6 +136,28 @@ export function extractPaths(text: string): string[] {
 
 export function extractUrls(text: string): string[] {
   return [...new Set(text.match(URL_RE) ?? [])];
+}
+
+/** URLs with the Markdown link text that labels them, when there is one. */
+export function extractLinks(text: string): Array<{ url: string; title?: string }> {
+  const out = new Map<string, string | undefined>();
+  for (const m of text.matchAll(/\[([^\]\n]{1,200})\]\((https?:\/\/[^)\s]+)\)/g)) if (!out.has(m[2])) out.set(m[2], m[1].replace(/[*_`]/g, '').trim() || undefined);
+  for (const url of text.match(URL_RE) ?? []) if (!out.has(url)) out.set(url, undefined);
+  return [...out.entries()].map(([url, title]) => ({ url, title }));
+}
+
+/**
+ * Text for a handoff bullet: citation chips appended by the adapters (" ([site](url))") are removed
+ * — the links section lists them — and the rest of the sentence is kept verbatim.
+ */
+export function bulletText(text: string): string {
+  return stripTracking(text.replace(/\s?\((?:\[[^\]\n]{1,80}\]\(https?:\/\/[^)\s]+\)(?:,\s*)?)+\)/g, '')).trim();
+}
+
+/** Removes tracking parameters (utm_source=chatgpt.com…) from every URL in the text. */
+export function stripTracking(text: string): string {
+  if (!/[?&#](utm_|fbclid|gclid|source=post_page|:~:text)/.test(text)) return text;
+  return text.replace(URL_RE, (url) => cleanUrl(url));
 }
 
 export function extractCommands(text: string): string[] {

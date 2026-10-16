@@ -18,7 +18,7 @@ import {
 } from '../shared/messages';
 import { detectSite, extractConversationId } from '../shared/sites';
 import type { Conversation, ExportFormat, JobKind, JobState, VerificationCheck } from '../shared/types';
-import { base64ToBytes, sniffImageMime, uid } from '../shared/util';
+import { base64ToBytes, sameDownloadName, sniffImageMime, uid } from '../shared/util';
 import { collectAssetRequests } from '../export/images';
 import { levelOf } from '../export/verify';
 
@@ -93,18 +93,29 @@ async function findJobAnywhere(jobId: string): Promise<JobState | undefined> {
 
 // ---------- message routing ----------
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const m = msg as any;
   switch (m?.type) {
     case 'start-job': {
       const r = m as Extract<PopupRequest, { type: 'start-job' }>;
-      startJob(r.kind, r.format, r.tabId, r.locale).then(sendResponse);
+      const tabId = r.tabId ?? sender.tab?.id;
+      if (tabId == null) {
+        sendResponse({ ok: false, error: 'NO_TAB' });
+        return false;
+      }
+      startJob(r.kind, r.format, tabId, r.locale).then(sendResponse);
       return true;
     }
-    case 'get-job':
-      getJob((m as { tabId: number }).tabId).then(sendResponse);
+    case 'get-job': {
+      const tabId = (m as { tabId?: number }).tabId ?? sender.tab?.id;
+      if (tabId == null) {
+        sendResponse(null);
+        return false;
+      }
+      getJob(tabId).then(sendResponse);
       return true;
+    }
     case 'show-download':
       chrome.downloads.show((m as { downloadId: number }).downloadId);
       return false;
@@ -229,6 +240,7 @@ async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Prom
     const checks: VerificationCheck[] = [...res.verification.checks];
     if (dl.bytes === res.bytes) checks.push({ code: 'download.ok', status: 'pass', params: { size: res.bytes } });
     else checks.push({ code: 'download.mismatch', status: 'fail', params: { saved: dl.bytes, expected: res.bytes } });
+    if (dl.filename && !sameDownloadName(dl.filename, res.filename)) checks.push({ code: 'download.renamed', status: 'warn', params: { name: dl.filename, expected: res.filename } });
     const verification = { ...res.verification, checks, level: levelOf(checks) };
     job.result = { filename: dl.filename || res.filename, bytes: res.bytes, verification, handoffStats: res.handoffStats, downloadId: dl.id };
     job.phase = 'done';
@@ -405,8 +417,20 @@ async function ensureOffscreen(): Promise<void> {
   await creating;
 }
 
+// Download managers (e.g. Video DownloadHelper) answer onDeterminingFilename for every download,
+// and Chrome then ignores the filename passed to downloads.download(): a blob: download ends up
+// named after the blob UUID. Suggesting our own name for our own downloads restores it (the most
+// recently installed extension's suggestion wins). Other downloads are left untouched.
+const pendingNames = new Map<string, string>();
+
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  const name = item.byExtensionId === chrome.runtime.id ? pendingNames.get(item.url) ?? pendingNames.get(item.finalUrl) : undefined;
+  if (name) suggest({ filename: name, conflictAction: 'uniquify' });
+});
+
 function download(url: string, filename: string): Promise<{ id: number; bytes: number; filename: string }> {
-  return new Promise((resolve, reject) => {
+  pendingNames.set(url, filename);
+  return new Promise<{ id: number; bytes: number; filename: string }>((resolve, reject) => {
     let id = -1;
     const timer = setTimeout(() => {
       chrome.downloads.onChanged.removeListener(onChanged);
@@ -440,5 +464,5 @@ function download(url: string, filename: string): Promise<{ id: number; bytes: n
         chrome.downloads.onChanged.removeListener(onChanged);
         reject(new JobError('DOWNLOAD_FAILED', e instanceof Error ? e.message : String(e)));
       });
-  });
+  }).finally(() => pendingNames.delete(url));
 }

@@ -214,3 +214,56 @@ export function imageSize(bytes: Uint8Array): { width: number; height: number } 
   }
   return undefined;
 }
+
+/** True when Chrome saved the file under the requested name, allowing a " (1)" uniquify suffix. */
+export function sameDownloadName(saved: string, wanted: string): boolean {
+  if (saved === wanted) return true;
+  const dot = wanted.lastIndexOf('.');
+  const stem = dot > 0 ? wanted.slice(0, dot) : wanted;
+  const ext = dot > 0 ? wanted.slice(dot) : '';
+  return saved.startsWith(stem) && saved.endsWith(ext) && /^ \(\d+\)$/.test(saved.slice(stem.length, saved.length - ext.length));
+}
+
+const TRACKING_KEY = /^(utm_\w+|fbclid|gclid|dclid|msclkid|igshid|mc_cid|mc_eid|ref_src)$/i;
+
+/** Removes tracking parameters (utm_*, fbclid, Medium's source=post_page…) and text fragments. */
+export function cleanUrl(url: string): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return url;
+  }
+  let changed = false;
+  for (const k of [...u.searchParams.keys()]) {
+    if (TRACKING_KEY.test(k) || (k === 'source' && u.searchParams.get(k)?.startsWith('post_page'))) {
+      u.searchParams.delete(k);
+      changed = true;
+    }
+  }
+  if (u.hash.startsWith('#:~:text=')) {
+    u.hash = '';
+    changed = true;
+  }
+  return changed ? u.toString() : url;
+}
+
+/** Comparison key for "the same page": tracking removed, no www., no trailing slash, lower case. */
+export function urlKey(url: string): string {
+  const c = cleanUrl(url);
+  try {
+    const u = new URL(c);
+    return `${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`.toLowerCase();
+  } catch {
+    return c.toLowerCase();
+  }
+}
+
+/** Short site name for a URL ("example.com"), used as a citation label. */
+export function hostLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return 'source';
+  }
+}
