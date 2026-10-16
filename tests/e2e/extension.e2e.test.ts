@@ -316,7 +316,8 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
 
   it('PDF text extraction keeps Korean text (pdftotext)', () => {
     try {
-      const txt = execFileSync('pdftotext', ['-layout', join(OUT, 'chatgpt-export.pdf'), '-'], { encoding: 'utf8' });
+      // -layout spacing depends on font metrics (Noto CJK on Linux), so compare normalized text.
+      const txt = execFileSync('pdftotext', ['-layout', join(OUT, 'chatgpt-export.pdf'), '-'], { encoding: 'utf8' }).replace(/\s+/g, ' ');
       expect(txt).toContain('Null 오류 분석');
       expect(txt).toContain('캔버스로 정리해 줘');
     } catch (e) {
