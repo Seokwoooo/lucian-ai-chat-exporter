@@ -3,6 +3,7 @@
 
 import type { ExportMessage, Role } from '../shared/types';
 import { fnv1a } from '../shared/util';
+import { nameImages } from './patterns';
 
 export type UnitKind = 'sentence' | 'item' | 'heading' | 'code' | 'table' | 'quote' | 'attachment';
 
@@ -159,12 +160,11 @@ export function segmentMessage(msg: ExportMessage, m: number, units: Unit[]): vo
   for (const c of msg.contents) {
     switch (c.type) {
       case 'text':
-        // User text is plain text: treat every line as its own paragraph line but keep fences.
-        segmentMarkdown(c.content ?? '', m, role, units);
+      case 'markdown': {
+        const md = c.content ?? '';
+        segmentMarkdown(nameImages(md, /[가-힣]/.test(md) ? 'ko' : 'en'), m, role, units);
         break;
-      case 'markdown':
-        segmentMarkdown(c.content ?? '', m, role, units);
-        break;
+      }
       case 'code':
       case 'artifact':
       case 'html_widget':

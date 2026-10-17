@@ -10,7 +10,7 @@ import { cleanUrl, estimateTokens, hangulRatio, hostLabel, urlKey } from '../sha
 import { messageBodyMarkdown, replaceOutsideCode } from '../export/markdown';
 import { clusterNearDuplicates, minhash } from './minhash';
 import { conceptsOf, greedyCoverage, type CoverItem } from './coverage';
-import { ANAPHOR_RE, CODE_ERROR_RE, F, REVERSAL_RE, bulletText, classify, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, replacementPairs, stripTracking, topicTokens } from './patterns';
+import { ANAPHOR_RE, CODE_ERROR_RE, F, REVERSAL_RE, bulletText, classify, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, nameImages, replacementPairs, stripTracking, topicTokens } from './patterns';
 import { segmentMessage, type Unit } from './segment';
 import { renderHandoff, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
 
@@ -412,7 +412,7 @@ function messageText(msg: Conversation['messages'][number]): string {
 
 /** Body of one message for the transcript sections: no source lists, headings demoted below ours. */
 export function transcriptBody(msg: Conversation['messages'][number], lang: 'ko' | 'en'): string {
-  const body = messageBodyMarkdown({ ...msg, contents: msg.contents.filter((c) => c.type !== 'sources') }, { locale: lang });
+  const body = nameImages(messageBodyMarkdown({ ...msg, contents: msg.contents.filter((c) => c.type !== 'sources') }, { locale: lang }), lang);
   // Message headings ("# 결론", "## 1. …") would otherwise read as sections of the handoff itself.
   return replaceOutsideCode(body, (seg) =>
     stripTracking(seg.replace(/^( {0,3})(#{1,6})(?=\s)/gm, (_, sp: string, h: string) => `${sp}${'#'.repeat(Math.min(6, h.length + 3))}`)),

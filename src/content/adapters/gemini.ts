@@ -10,6 +10,7 @@ import {
   ExtractError,
   cleanTitle,
   fetchWithRetry,
+  renderedElements,
   titleFromFirstUserMessage,
   type AdapterContext,
   type SiteAdapter,
@@ -290,7 +291,7 @@ export const geminiAdapter: SiteAdapter = {
   },
 
   countDomUserTurns() {
-    const n = document.querySelectorAll('user-query').length;
+    const n = renderedElements('user-query').length;
     return n > 0 ? n : undefined;
   },
 

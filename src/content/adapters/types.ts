@@ -111,6 +111,15 @@ export async function fetchJson<T = unknown>(ctx: AdapterContext | null, url: st
   }
 }
 
+/**
+ * Elements of the conversation on screen. Single-page sites keep earlier conversations mounted but
+ * hidden (`display: none`) after in-app navigation (seen on chatgpt.com in 2026-10), so a plain
+ * querySelectorAll also returns another conversation's turns. Turns scrolled out of view still count.
+ */
+export function renderedElements(selector: string): Element[] {
+  return Array.from(document.querySelectorAll(selector)).filter((el) => el.checkVisibility());
+}
+
 export function readCookie(name: string): string | undefined {
   const m = document.cookie.match(new RegExp(`(?:^|;\\s*)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=([^;]*)`));
   return m ? decodeURIComponent(m[1]) : undefined;

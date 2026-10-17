@@ -1,3 +1,4 @@
+import { replaceOutsideCode } from '../export/markdown';
 import { cleanUrl } from '../shared/util';
 
 // Rule-based detectors for Korean and English chat text. No model is involved: every flag comes
@@ -119,7 +120,7 @@ export function classify(text: string, role: 'user' | 'assistant'): number {
 // ---------- entities ----------
 
 const PATH_RE =
-  /(?:~|\.{1,2}|[A-Za-z]:)?(?:[\\/][\w.@+-]+){2,}\/?|\b[\w-]+(?:\/[\w.@-]+)+\.[A-Za-z0-9]{1,6}\b|\b[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|ps1|sql|md|mdx|json|jsonc|yml|yaml|toml|ini|env|lock|html|css|scss|vue|svelte|xml|csv|txt|pdf|docx|hwpx|ipynb|gradle|tf|dockerfile)\b/gi;
+  /(?:~|\.{1,2}|[A-Za-z]:)?(?:[\\/][\w.@+-]+){2,}\/?|(?<![\w.-])[\w-]+(?:\/[\w.@-]+)+\.[A-Za-z0-9]{1,6}\b(?!\.[A-Za-z0-9])|\b[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|ps1|sql|md|mdx|json|jsonc|yml|yaml|toml|ini|env|lock|html|css|scss|vue|svelte|xml|csv|txt|pdf|docx|hwpx|ipynb|gradle|tf|dockerfile)\b(?!\.[A-Za-z0-9])/gi;
 const URL_RE = /https?:\/\/[^\s<>()"'`\]]+[^\s<>()"'`\].,;:!?]/g;
 const CMD_RE = /^(?:\$\s+|>\s+)?((?:npm|npx|pnpm|yarn|bun|node|deno|git|gh|pip3?|python3?|uv|poetry|docker|docker-compose|kubectl|curl|wget|brew|apt(?:-get)?|cargo|go|make|cmake|java|mvn|gradle|dotnet|terraform|aws|gcloud|firebase|vercel|supabase|psql|mysql|redis-cli|chmod|mkdir|cd|ls|cp|mv|rm|export|source)\s[^\n]{1,200})$/gm;
 
@@ -132,6 +133,37 @@ export function extractPaths(text: string): string[] {
     out.add(p);
   }
   return [...out];
+}
+
+const IMG_MD_RE = /!\[([^\]\n]*)\]\((\S+?)(?:\s+"[^"]*")?\)/g;
+
+/**
+ * Images are only named in a handoff: the next AI cannot open them, and service links are often
+ * signed and private (e.g. chatgpt.com/backend-api/estuary/content?…&sig=…).
+ */
+export function nameImages(md: string, lang: 'ko' | 'en'): string {
+  if (!md.includes('![')) return md;
+  const label = lang === 'ko' ? '이미지' : 'image';
+  return replaceOutsideCode(md, (seg) =>
+    seg.replace(IMG_MD_RE, (_, alt: string, url: string) => {
+      const a = alt.trim();
+      const name = (imageName(url) ?? (a && !/^(?:이미지|image)$/i.test(a) ? a : '')).replace(/[[\]\n]/g, ' ').trim();
+      return name ? `[${label}: ${name}]` : `[${label}]`;
+    }),
+  );
+}
+
+function imageName(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    const fn = u.searchParams.get('fn') ?? u.searchParams.get('filename');
+    if (fn) return fn;
+    const last = decodeURIComponent(u.pathname.split('/').pop() ?? '');
+    if (/^[^/;,]{1,120}\.(?:png|jpe?g|gif|webp|svg|heic|bmp|avif)$/i.test(last)) return last;
+  } catch {
+    // relative paths have no useful name
+  }
+  return undefined;
 }
 
 export function extractUrls(text: string): string[] {

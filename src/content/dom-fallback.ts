@@ -6,7 +6,7 @@
 import { SITES } from '../shared/sites';
 import type { Conversation, ExportMessage, Role, SiteId } from '../shared/types';
 import { sleep } from '../shared/util';
-import { ExtractError, cleanTitle, titleFromFirstUserMessage, type AdapterContext } from './adapters/types';
+import { ExtractError, cleanTitle, renderedElements, titleFromFirstUserMessage, type AdapterContext } from './adapters/types';
 import { htmlToMarkdown } from './html-to-md';
 
 interface DomSpec {
@@ -85,17 +85,16 @@ function scrollableAncestor(el: Element | null): HTMLElement | null {
 
 /** Scrolls up until no more history renders (bounded to keep the fallback responsive). */
 async function loadLazyHistory(spec: DomSpec, ctx: AdapterContext): Promise<void> {
-  const first = document.querySelector(spec.items);
-  const scroller = scrollableAncestor(first);
+  const scroller = scrollableAncestor(renderedElements(spec.items)[0] ?? null);
   if (!scroller) return;
   const original = scroller.scrollTop;
-  let last = document.querySelectorAll(spec.items).length;
+  let last = renderedElements(spec.items).length;
   let stable = 0;
   const deadline = Date.now() + 45_000;
   for (let i = 0; i < 120 && Date.now() < deadline && stable < 3; i++) {
     scroller.scrollTop = 0;
     await sleep(700);
-    const count = document.querySelectorAll(spec.items).length;
+    const count = renderedElements(spec.items).length;
     ctx.progress('messages', count);
     if (count > last) {
       last = count;
@@ -125,7 +124,8 @@ class DomCollector {
   constructor(private readonly spec: DomSpec) {}
 
   scan(): number {
-    const elements = outermost(Array.from(document.querySelectorAll(this.spec.items)));
+    // Only the conversation on screen: earlier ones can stay mounted but hidden (see renderedElements).
+    const elements = outermost(renderedElements(this.spec.items));
     let anchor = -1;
     for (const el of elements) {
       let key = this.spec.key?.(el) ?? this.ids.get(el);
@@ -149,7 +149,7 @@ class DomCollector {
 
 /** Walks a virtualized list from top to bottom so turns that are unmounted get read too. */
 async function scanDownwards(collector: DomCollector, spec: DomSpec): Promise<void> {
-  const scroller = scrollableAncestor(document.querySelector(spec.items));
+  const scroller = scrollableAncestor(renderedElements(spec.items)[0] ?? null);
   if (!scroller) return;
   const original = scroller.scrollTop;
   const deadline = Date.now() + 60_000;

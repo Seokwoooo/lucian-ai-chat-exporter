@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handoffBudget, runHandoff } from '../../src/handoff/engine';
-import { ANAPHOR_RE } from '../../src/handoff/patterns';
+import { ANAPHOR_RE, extractPaths } from '../../src/handoff/patterns';
 import { verifyHandoffMarkdown } from '../../src/handoff/render';
 import { conv as makeConv, englishScenario, koreanScenario, msg, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
 import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
@@ -357,3 +357,19 @@ describe('handoff structure check (verification report)', () => {
   });
 });
 
+describe('files and images from a real ChatGPT handoff (v1.3.2)', () => {
+  it('does not take Korean government domains (.go.kr) for Go files', () => {
+    const text = '출처는 [district.go.kr](https://district.go.kr/a/b) 와 www.agency.go.kr 입니다. 코드는 main.go, src/app.ts, config.yaml. 에 있고 ./scripts/run.sh 도 봐요.';
+    expect(extractPaths(text)).toEqual(['main.go', 'src/app.ts', 'config.yaml', './scripts/run.sh']);
+  });
+
+  it('names attached images instead of copying their signed links', () => {
+    const user = msg('user', '이 주스는 원액 함량이 낮은데 괜찮은 제품인가요?');
+    user.contents.push({ type: 'image', imageUrl: 'https://chatgpt.com/backend-api/estuary/content?id=file_0001&fn=IMG_0001.jpeg&sig=abc123', alt: '이미지' });
+    const answer = msg('assistant', '표시 기준으로 보면 원액 함량이 낮은 편입니다.\n\n![성분표](https://files.example.com/u/label.png?token=secret)');
+    const md = runHandoff(makeConv([user, answer]), { now: 0 }).markdown;
+    expect(md).toContain('[이미지: IMG_0001.jpeg]');
+    expect(md).toContain('[이미지: label.png]');
+    expect(md).not.toMatch(/estuary|sig=|token=secret/);
+  });
+});

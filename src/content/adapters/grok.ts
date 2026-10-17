@@ -5,7 +5,7 @@ import { SITES } from '../../shared/sites';
 import type { BranchMessages, Conversation, ExportContent, ExportMessage, SkippedNode, SourceRef } from '../../shared/types';
 import { cleanUrl, hostLabel, toEpochMs, urlKey } from '../../shared/util';
 import { domFallbackExtract } from '../dom-fallback';
-import { ExtractError, cleanTitle, fetchJson, titleFromFirstUserMessage, type AdapterContext, type SiteAdapter } from './types';
+import { ExtractError, cleanTitle, fetchJson, renderedElements, titleFromFirstUserMessage, type AdapterContext, type SiteAdapter } from './types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Json = any;
@@ -237,7 +237,7 @@ export const grokAdapter: SiteAdapter = {
   },
 
   countDomUserTurns() {
-    const bubbles = document.querySelectorAll('div[class*="items-end"] .message-bubble');
+    const bubbles = renderedElements('div[class*="items-end"] .message-bubble');
     return bubbles.length > 0 ? bubbles.length : undefined;
   },
 

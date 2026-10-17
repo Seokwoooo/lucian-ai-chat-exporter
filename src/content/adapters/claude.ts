@@ -6,7 +6,7 @@ import { SITES } from '../../shared/sites';
 import type { Conversation, ExportContent, ExportMessage, SkippedNode, SourceRef, BranchMessages } from '../../shared/types';
 import { toEpochMs } from '../../shared/util';
 import { domFallbackExtract } from '../dom-fallback';
-import { ExtractError, fetchJson, readCookie, type AdapterContext, type SiteAdapter } from './types';
+import { ExtractError, fetchJson, readCookie, renderedElements, type AdapterContext, type SiteAdapter } from './types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Json = any;
@@ -312,7 +312,7 @@ export const claudeAdapter: SiteAdapter = {
   },
 
   countDomUserTurns() {
-    const n = document.querySelectorAll('[data-testid="user-message"]').length;
+    const n = renderedElements('[data-testid="user-message"]').length;
     return n > 0 ? n : undefined;
   },
 

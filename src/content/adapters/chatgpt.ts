@@ -17,6 +17,7 @@ import {
   ExtractError,
   fetchJson,
   readCookie,
+  renderedElements,
   type AdapterContext,
   type AssetResolveRequest,
   type SiteAdapter,
@@ -709,10 +710,7 @@ export const chatgptAdapter: SiteAdapter = {
 
   countDomUserTurns() {
     // Lower bound only: the conversation view is virtualized and unmounts off-screen turns.
-    const n = Math.max(
-      document.querySelectorAll('[data-message-author-role="user"]').length,
-      document.querySelectorAll('[data-user-message-bubble]').length,
-    );
+    const n = Math.max(renderedElements('[data-message-author-role="user"]').length, renderedElements('[data-user-message-bubble]').length);
     return n > 0 ? n : undefined;
   },
 

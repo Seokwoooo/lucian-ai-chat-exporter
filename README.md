@@ -51,7 +51,7 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 ### 릴리스 ZIP으로 설치 (개발자 모드)
 
-1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.3.1.zip`을 받아 압축을 풉니다.
+1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.3.2.zip`을 받아 압축을 풉니다.
 2. Chrome 주소창에 `chrome://extensions`를 입력합니다.
 3. 오른쪽 위 **개발자 모드**를 켭니다.
 4. **압축해제된 확장 프로그램을 로드합니다**를 누르고, 압축을 푼 폴더(`manifest.json`이 있는 폴더)를 고릅니다.
