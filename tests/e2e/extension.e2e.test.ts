@@ -37,6 +37,15 @@ function findChrome(): string | undefined {
 }
 
 const CHROME = findChrome();
+/** README screenshots: stop the handoff illustration mid-flight (MD document on the arc, destination logo shown). */
+async function freezeVisual(p: Page, inPanel = false): Promise<void> {
+  await p.evaluate((inPanel) => {
+    const root: ParentNode | null | undefined = inPanel ? document.querySelector('[data-lucian-panel]')?.shadowRoot : document;
+    root?.querySelectorAll<SVGSVGElement>('svg.hv-arc').forEach((s) => { s.pauseAnimations(); s.setCurrentTime(1); });
+    root?.querySelectorAll('.hv').forEach((h) => h.getAnimations({ subtree: true }).forEach((a) => { a.pause(); a.currentTime = 1000; }));
+  }, inPanel);
+}
+
 const log = (...a: unknown[]) => process.env.E2E_DEBUG && process.stderr.write(`[e2e] ${a.map(String).join(' ')}\n`);
 let browser: Browser;
 let extId = '';
@@ -209,6 +218,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
     await popup.goto(`chrome-extension://${extId}/popup.html?tabId=${id}`, { waitUntil: 'load' });
     await popup.waitForSelector('#notice:not([hidden])');
     expect(await popup.$eval('#handoffBtn', (b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    await freezeVisual(popup);
     await popup.screenshot({ path: join(SHOTS, 'popup-unsupported.png') });
     await page.close();
   });
@@ -241,6 +251,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
           const r = h.shadowRoot!.querySelector('.panel')!.getBoundingClientRect();
           return { x: r.x, y: r.y, width: r.width, height: r.height };
         });
+        await freezeVisual(page, true);
         await page.screenshot({ path: join(SHOTS, 'page-button-panel.png'), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 72 } });
       }
       const t0 = Date.now();
@@ -298,6 +309,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       report.push({ site, kind: 'handoff', ms: h.ms, timings: h.job.timings, level: h.job.result?.verification.level });
       if (site === 'chatgpt') {
         await popup.click('#detailsBtn');
+        await freezeVisual(popup);
         await popup.screenshot({ path: join(SHOTS, 'popup-handoff-done.png') });
       }
 
@@ -319,7 +331,10 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
           expect(v.checks.some((c) => c.code === 'images.all' && c.status === 'pass'), `${site}/${format} images`).toBe(true);
         }
         report.push({ site, kind: format, ms: r.ms, timings: r.job.timings, level: v.level, bytes: bytes.byteLength, images: `${v.counts.images - v.counts.imagesMissing}/${v.counts.images}` });
-        if (site === 'chatgpt' && format === 'docx') await popup.screenshot({ path: join(SHOTS, 'popup-export-done.png') });
+        if (site === 'chatgpt' && format === 'docx') {
+          await freezeVisual(popup);
+          await popup.screenshot({ path: join(SHOTS, 'popup-export-done.png') });
+        }
       }
 
       // ZIP backup contains the original attachment where the service exposes one (ChatGPT).
@@ -393,10 +408,13 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
     await popup.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
     await popup.goto(`chrome-extension://${extId}/popup.html?tabId=${tabId}`, { waitUntil: 'load' });
     await popup.waitForSelector('#status:not([hidden])');
+    await freezeVisual(popup);
     await popup.screenshot({ path: join(SHOTS, 'popup-dark.png') });
     await popup.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
     await popup.goto(`chrome-extension://${extId}/popup.html?tabId=${tabId}`, { waitUntil: 'load' });
     await popup.click('#moreBtn');
+    await new Promise((r) => setTimeout(r, 250)); // let the chevron finish turning
+    await freezeVisual(popup);
     await popup.screenshot({ path: join(SHOTS, 'popup-light.png') });
   });
 

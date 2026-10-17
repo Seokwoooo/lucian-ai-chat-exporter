@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { conceptsOf, greedyCoverage, type CoverItem } from '../../src/handoff/coverage';
-import { handoffTargets, handoffVisualHtml } from '../../src/shared/handoff-visual';
+import { HANDOFF_VISUAL_CSS, handoffTargets, handoffVisualHtml } from '../../src/shared/handoff-visual';
 
 const item = (id: number, words: string, cost = 10, prior = 1): CoverItem => ({ id, concepts: conceptsOf(words.split(' ')), cost, prior });
 
@@ -57,5 +57,22 @@ describe('handoff illustration', () => {
     for (const s of ['chatgpt', 'claude', 'grok']) expect(html).toContain(`providers/${s}.svg`);
     expect(html).toContain('aria-label="Gemini에서 하던 대화를');
     expect(html).toContain('hv-dark');
+  });
+
+  it('draws the arrow from logo to logo at their vertical centre (v1.3.1)', () => {
+    // The arc is drawn 1:1 in pixels inside a fixed 120px column between two 56px columns with 30px logos.
+    expect(HANDOFF_VISUAL_CSS).toContain('grid-template-columns: 56px 120px 56px');
+    expect(HANDOFF_VISUAL_CSS).toMatch(/\.hv-arc \{ width: 120px; height: 30px;/);
+    expect(HANDOFF_VISUAL_CSS).toMatch(/\.hv-logo \{[^}]*width: 30px; height: 30px;/);
+    expect(HANDOFF_VISUAL_CSS).toContain('align-items: start');
+    const html = handoffVisualHtml('claude', (s) => s, 'ko');
+    expect(html).toContain('viewBox="0 0 120 30"');
+    const nums = (html.match(/class="track" d="([^"]+)"/)?.[1] ?? '').match(/-?\d+(\.\d+)?/g)!.map(Number);
+    const [x0, y0, x1, y1] = [nums[0], nums[1], nums[nums.length - 2], nums[nums.length - 1]];
+    expect([y0, y1]).toEqual([15, 15]); // logo centre, not the name labels below
+    expect(x0).toBeGreaterThan(-13); // the source logo's right edge is at x = -13
+    expect(x0).toBeLessThan(0);
+    expect(x1).toBeGreaterThan(120);
+    expect(x1).toBeLessThan(133); // the destination logo's left edge is at x = 133
   });
 });

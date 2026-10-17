@@ -2,7 +2,7 @@
 
 > 이 문서는 Chrome 웹 스토어 등록용 **초안**입니다. 게시 전에 운영자 정보와 연락처를 채우고 법률 검토를 거쳐 주세요.
 
-시행일: 2026-10-17 · 대상: Lucian AI Chat Exporter (Chrome 확장 프로그램) v1.3.0
+시행일: 2026-10-17 · 대상: Lucian AI Chat Exporter (Chrome 확장 프로그램) v1.3.1
 
 ## 1. 요약
 
