@@ -1,7 +1,7 @@
 // Runtime message contracts between popup, service worker, content script, offscreen document
 // and print page.
 
-import type { BranchMessages, Conversation, ExportFormat, ExportMessage, JobKind, JobState, JobTimings, Verification, HandoffStats } from './types';
+import type { BranchMessages, Conversation, ExportFormat, ExportMessage, JobKind, JobState, JobTimings, MdImageMode, Verification, HandoffStats } from './types';
 import type { Locale } from './i18n';
 
 export const COLLECT_PORT = 'lucian-collect';
@@ -29,7 +29,7 @@ export type FromContent =
 
 export type PopupRequest =
   /** tabId is omitted when the request comes from the in-page button (the sender's tab is used). */
-  | { type: 'start-job'; kind: JobKind; format?: ExportFormat; tabId?: number; locale: Locale }
+  | { type: 'start-job'; kind: JobKind; format?: ExportFormat; tabId?: number; locale: Locale; mdImages?: MdImageMode }
   | { type: 'get-job'; tabId?: number }
   | { type: 'show-download'; downloadId: number };
 
@@ -53,6 +53,7 @@ export interface BuildRequest {
   assets: AssetStatus[];
   /** Offscreen documents only get the messaging part of chrome.runtime, so the SW passes this. */
   appVersion: string;
+  mdImages?: MdImageMode;
 }
 
 export interface BuildResponse {
@@ -65,6 +66,8 @@ export interface BuildResponse {
   handoffStats?: HandoffStats;
   timings?: JobTimings;
   error?: string;
+  /** Saved before the main file, as they are named (Markdown "folder" mode: its images). */
+  extraFiles?: Array<{ blobUrl: string; filename: string; bytes: number }>;
 }
 
 export interface OffscreenProgress {

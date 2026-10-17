@@ -4,7 +4,7 @@
 import { strToU8, zipSync, type Zippable } from 'fflate';
 import type { Locale } from '../shared/i18n';
 import type { AssetStatus } from '../shared/messages';
-import type { Conversation, ExportFormat, Verification } from '../shared/types';
+import type { Conversation, ExportFormat, MdImageMode, Verification } from '../shared/types';
 import { bytesToBase64, formatDate, mimeToExt, safeFilename, yieldToLoop, type ProgressFn } from '../shared/util';
 import type { ImageStore, StoredImage } from './images';
 import { conversationToMarkdown } from './markdown';
@@ -49,6 +49,8 @@ export interface PipelineInput {
   appVersion?: string;
   /** Overall progress of build + verification, 0…1. */
   onProgress?: ProgressFn;
+  /** Markdown only: how the chat's images are saved (asked each time; v1.3.6). */
+  mdImages?: MdImageMode;
 }
 
 export interface PipelineOutput {
@@ -57,6 +59,8 @@ export interface PipelineOutput {
   filename: string;
   verification: Verification;
   stageMs?: { build: number; verify: number };
+  /** Files saved next to the main one (Markdown "folder" mode: its images), named relative to it. */
+  extraFiles?: Array<{ filename: string; bytes: Uint8Array; mime: string }>;
 }
 
 export function exportFilename(conv: Conversation, ext: string): string {
@@ -97,15 +101,43 @@ export async function runExport(input: PipelineInput): Promise<PipelineOutput> {
   const building: ProgressFn = (f, stage) => report(share * f, stage ?? 'build');
   let bytes: Uint8Array;
   let stats: FormatStats = {};
+  let mime = FORMAT_MIME[format];
+  let filename = exportFilename(conv, format);
+  let extraFiles: PipelineOutput['extraFiles'];
   let verify: (onProgress: (f: number) => void) => OutputCheck | Promise<OutputCheck>;
   const t0 = performance.now();
   report(0, 'build');
 
   switch (format) {
     case 'md': {
-      const md = conversationToMarkdown(conv, { locale }, exportedAt);
-      bytes = enc.encode(md.text);
-      verify = () => verifyTextOutput(bytes, md.headers);
+      const mode = input.mdImages;
+      if (mode === 'zip' || mode === 'folder') {
+        // The .md links each image by a relative path: inside the ZIP ("images/…") or in the
+        // "<title>_files" folder saved next to the .md. Images that could not be fetched get a note.
+        const stem = exportFilename(conv, 'md').replace(/\.md$/, '');
+        const images = savedImages(input, mode === 'zip' ? 'images/' : `${stem}_files/`, mode === 'folder');
+        const md = conversationToMarkdown(conv, { locale, imageHref: (u) => images.path.get(u), unmappedImage: 'missing' }, exportedAt);
+        stats = { imagesMissing: images.missing };
+        if (mode === 'zip') {
+          const files: Zippable = { [`${stem}/${stem}.md`]: strToU8(md.text) };
+          for (const f of images.files) files[`${stem}/${f.filename}`] = [f.bytes, { level: 0 }];
+          bytes = zipSync(files, { level: 6 });
+          mime = FORMAT_MIME.zip;
+          filename = exportFilename(conv, 'zip');
+          const required = Object.keys(files);
+          verify = () => verifyZipOutput(bytes, required);
+        } else {
+          bytes = enc.encode(md.text);
+          extraFiles = images.files;
+          verify = () => verifyTextOutput(bytes, md.headers);
+        }
+      } else {
+        // 'none': the user chose the .md alone, so images become "[이미지: …]" instead of links that
+        // only open while logged in to the service. Without a choice (no images) nothing changes.
+        const md = conversationToMarkdown(conv, { locale, unmappedImage: mode === 'none' ? 'omit' : 'link' }, exportedAt);
+        bytes = enc.encode(md.text);
+        verify = () => verifyTextOutput(bytes, md.headers);
+      }
       break;
     }
     case 'txt': {
@@ -166,8 +198,39 @@ export async function runExport(input: PipelineInput): Promise<PipelineOutput> {
   const output = await verify((f) => report(share + (1 - share) * f, 'verify'));
   const verifyMs = performance.now() - t1;
   report(1, 'verify');
-  const verification = buildVerification(conv, format, { assets: input.assetStatus, stats, output, formatLabel: FORMAT_LABEL[format] });
-  return { bytes, mime: FORMAT_MIME[format], filename: exportFilename(conv, format), verification, stageMs: { build: buildMs, verify: verifyMs } };
+  const verification = buildVerification(conv, format, { assets: input.assetStatus, stats, output, formatLabel: FORMAT_LABEL[format], mdImages: format === 'md' ? input.mdImages : undefined });
+  return { bytes, mime, filename, verification, stageMs: { build: buildMs, verify: verifyMs }, extraFiles };
+}
+
+/**
+ * The fetched images of a Markdown export, named in conversation order under `dir`. In "folder"
+ * mode a short content hash is added: saving the same chat again overwrites identical files
+ * instead of creating "image-001 (1).png", which would break the .md's links.
+ */
+function savedImages(input: PipelineInput, dir: string, hashed: boolean) {
+  const path = new Map<string, string>();
+  const files: Array<{ filename: string; bytes: Uint8Array; mime: string }> = [];
+  let n = 0;
+  let missing = 0;
+  for (const a of input.assetStatus) {
+    if (a.kind !== 'image') continue;
+    const data = input.raw.get(a.key);
+    if (!a.ok || !data) {
+      missing++;
+      continue;
+    }
+    const name = `${dir}image-${String(++n).padStart(3, '0')}${hashed ? `-${contentHash(data.bytes)}` : ''}.${mimeToExt(data.mime, 'png')}`;
+    path.set(a.key, name);
+    files.push({ filename: name, bytes: data.bytes, mime: data.mime });
+  }
+  return { path, files, missing };
+}
+
+/** FNV-1a over the bytes, 8 hex digits: enough to tell different images of one chat apart. */
+function contentHash(bytes: Uint8Array): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) h = Math.imul(h ^ bytes[i], 0x01000193);
+  return (h >>> 0).toString(16).padStart(8, '0');
 }
 
 async function buildZip(input: PipelineInput, exportedAt: number, appVersion: string, onProgress?: ProgressFn) {

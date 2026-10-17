@@ -17,9 +17,9 @@ import {
   type PrintReport,
 } from '../shared/messages';
 import { detectSite, extractConversationId } from '../shared/sites';
-import type { Conversation, ExportFormat, JobKind, JobState, VerificationCheck } from '../shared/types';
+import type { Conversation, ExportFormat, JobKind, JobState, MdImageMode, VerificationCheck } from '../shared/types';
 import { base64ToBytes, sameDownloadName, sniffImageMime, uid } from '../shared/util';
-import { collectAssetRequests } from '../export/images';
+import { collectAssetRequests, countImageRefs } from '../export/images';
 import { levelOf } from '../export/verify';
 
 class JobError extends Error {
@@ -69,7 +69,7 @@ async function getJob(tabId: number): Promise<JobState | null> {
   const stored = await chrome.storage.session.get(jobStorageKey(tabId));
   const job = (stored[jobStorageKey(tabId)] as JobState | undefined) ?? null;
   // A job that was mid-flight when the service worker restarted cannot be resumed.
-  if (job && !['done', 'error', 'print'].includes(job.phase) && !running.has(tabId)) {
+  if (job && !['done', 'error', 'print', 'choose'].includes(job.phase) && !running.has(tabId)) {
     job.phase = 'error';
     job.error = { code: 'INTERRUPTED' };
     await saveJob(job, true);
@@ -104,7 +104,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, error: 'NO_TAB' });
         return false;
       }
-      startJob(r.kind, r.format, tabId, r.locale).then(sendResponse);
+      startJob(r.kind, r.format, tabId, r.locale, r.mdImages).then(sendResponse);
       return true;
     }
     case 'get-job': {
@@ -154,14 +154,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ---------- job runner ----------
 
-async function startJob(kind: JobKind, format: ExportFormat | undefined, tabId: number, locale: Locale): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+async function startJob(kind: JobKind, format: ExportFormat | undefined, tabId: number, locale: Locale, mdImages?: MdImageMode): Promise<{ ok: boolean; jobId?: string; error?: string }> {
   if (running.has(tabId)) return { ok: false, error: 'BUSY' };
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab?.url) return { ok: false, error: 'NO_TAB' };
   const site = detectSite(tab.url);
   if (!site) return { ok: false, error: 'NOT_SUPPORTED' };
   if (!extractConversationId(site, tab.url)) return { ok: false, error: 'NOT_CONVERSATION' };
-  const job: JobState = { id: uid('job-'), kind, format, tabId, site, phase: 'collecting', timings: {}, startedAt: Date.now() };
+  const job: JobState = { id: uid('job-'), kind, format, tabId, site, phase: 'collecting', timings: {}, startedAt: Date.now(), mdImages: format === 'md' ? mdImages : undefined };
   running.add(tabId);
   await saveJob(job, true);
   void runJob(job, tab, locale)
@@ -190,8 +190,24 @@ async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Prom
     job.title = conv.title;
     const key = await putConversation(conv);
 
+    // A Markdown file cannot hold the chat's images: ask how to save them (ZIP, a folder next to
+    // the .md, or leave them out). The job stops here; the answer starts a new job (v1.3.6).
+    if (job.kind === 'export' && job.format === 'md' && !job.mdImages) {
+      const images = countImageRefs(conv);
+      if (images > 0) {
+        port.disconnect();
+        job.phase = 'choose';
+        job.choice = { kind: 'md-images', images };
+        job.progress = undefined;
+        job.finishedAt = Date.now();
+        await saveJob(job, true);
+        return;
+      }
+    }
+
     let assets: AssetStatus[] = [];
-    if (job.kind === 'export' && job.format && ASSET_FORMATS.includes(job.format)) {
+    const withImages = job.format === 'md' && (job.mdImages === 'zip' || job.mdImages === 'folder');
+    if (job.kind === 'export' && job.format && (ASSET_FORMATS.includes(job.format) || withImages)) {
       const requests = collectAssetRequests(conv, job.format === 'zip');
       if (requests.length) {
         job.phase = 'assets';
@@ -227,6 +243,7 @@ async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Prom
       locale,
       assets,
       appVersion: chrome.runtime.getManifest().version,
+      mdImages: job.mdImages,
     } satisfies BuildRequest)) as BuildResponse | undefined;
     if (!res?.ok || !res.blobUrl || !res.filename || res.bytes == null || !res.verification) throw new JobError('BUILD_FAILED', res?.error);
     job.timings = { ...job.timings, ...res.timings };
@@ -234,11 +251,33 @@ async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Prom
     job.phase = 'downloading';
     await saveJob(job, true);
     const td = performance.now();
+    // Files next to the main one (the .md's image folder) go first; identical names hold identical
+    // bytes (content hash), so they overwrite instead of becoming "… (1).png".
+    const extraChecks: VerificationCheck[] = [];
+    // The .md links "<folder>/<file>": each file must land there, in the directory the .md is
+    // saved to (a download manager or "ask where to save" could put it elsewhere).
+    const dirOf = (p: string) => p.replace(/[\\/][^\\/]*$/, '');
+    const placed: string[] = [];
+    let folder = '';
+    if (res.extraFiles?.length) {
+      folder = res.extraFiles[0].filename.split('/')[0];
+      for (const f of res.extraFiles) {
+        const r = await download(f.blobUrl, f.filename, 'overwrite').catch(() => null);
+        void chrome.runtime.sendMessage({ target: 'offscreen', type: 'revoke', url: f.blobUrl }).catch(() => undefined);
+        if (r && r.bytes === f.bytes && r.path.replace(/\\/g, '/').endsWith(`/${f.filename}`)) placed.push(r.path.replace(/\\/g, '/').slice(0, -f.filename.length - 1));
+      }
+    }
     const dl = await download(res.blobUrl, res.filename);
+    if (res.extraFiles?.length) {
+      const mdDir = dirOf(dl.path.replace(/\\/g, '/'));
+      const saved = placed.filter((d) => d === mdDir).length;
+      const failed = res.extraFiles.length - saved;
+      extraChecks.push(failed ? { code: 'images.folderFailed', status: 'warn', params: { n: failed, folder } } : { code: 'images.folder', status: 'pass', params: { n: saved, folder } });
+    }
     job.timings.downloadMs = performance.now() - td;
     void chrome.runtime.sendMessage({ target: 'offscreen', type: 'revoke', url: res.blobUrl }).catch(() => undefined);
 
-    const checks: VerificationCheck[] = [...res.verification.checks];
+    const checks: VerificationCheck[] = [...res.verification.checks, ...extraChecks];
     if (dl.bytes === res.bytes) checks.push({ code: 'download.ok', status: 'pass', params: { size: res.bytes } });
     else checks.push({ code: 'download.mismatch', status: 'fail', params: { saved: dl.bytes, expected: res.bytes } });
     if (dl.filename && !sameDownloadName(dl.filename, res.filename)) checks.push({ code: 'download.renamed', status: 'warn', params: { name: dl.filename, expected: res.filename } });
@@ -422,16 +461,17 @@ async function ensureOffscreen(): Promise<void> {
 // and Chrome then ignores the filename passed to downloads.download(): a blob: download ends up
 // named after the blob UUID. Suggesting our own name for our own downloads restores it (the most
 // recently installed extension's suggestion wins). Other downloads are left untouched.
-const pendingNames = new Map<string, string>();
+type Conflict = 'uniquify' | 'overwrite';
+const pendingNames = new Map<string, { name: string; conflict: Conflict }>();
 
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-  const name = item.byExtensionId === chrome.runtime.id ? pendingNames.get(item.url) ?? pendingNames.get(item.finalUrl) : undefined;
-  if (name) suggest({ filename: name, conflictAction: 'uniquify' });
+  const p = item.byExtensionId === chrome.runtime.id ? pendingNames.get(item.url) ?? pendingNames.get(item.finalUrl) : undefined;
+  if (p) suggest({ filename: p.name, conflictAction: p.conflict as chrome.downloads.FilenameConflictAction });
 });
 
-function download(url: string, filename: string): Promise<{ id: number; bytes: number; filename: string }> {
-  pendingNames.set(url, filename);
-  return new Promise<{ id: number; bytes: number; filename: string }>((resolve, reject) => {
+function download(url: string, filename: string, conflict: Conflict = 'uniquify'): Promise<{ id: number; bytes: number; filename: string; path: string }> {
+  pendingNames.set(url, { name: filename, conflict });
+  return new Promise<{ id: number; bytes: number; filename: string; path: string }>((resolve, reject) => {
     let id = -1;
     const timer = setTimeout(() => {
       chrome.downloads.onChanged.removeListener(onChanged);
@@ -443,7 +483,7 @@ function download(url: string, filename: string): Promise<{ id: number; bytes: n
       if (item.state === 'complete') {
         clearTimeout(timer);
         chrome.downloads.onChanged.removeListener(onChanged);
-        resolve({ id, bytes: item.fileSize > 0 ? item.fileSize : item.bytesReceived, filename: item.filename.split(/[\\/]/).pop() ?? filename });
+        resolve({ id, bytes: item.fileSize > 0 ? item.fileSize : item.bytesReceived, filename: item.filename.split(/[\\/]/).pop() ?? filename, path: item.filename });
       } else if (item.state === 'interrupted') {
         clearTimeout(timer);
         chrome.downloads.onChanged.removeListener(onChanged);
@@ -455,7 +495,7 @@ function download(url: string, filename: string): Promise<{ id: number; bytes: n
     };
     chrome.downloads.onChanged.addListener(onChanged);
     chrome.downloads
-      .download({ url, filename, saveAs: false, conflictAction: 'uniquify' })
+      .download({ url, filename, saveAs: false, conflictAction: conflict as chrome.downloads.FilenameConflictAction })
       .then((newId) => {
         id = newId;
         void check();

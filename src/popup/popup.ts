@@ -5,7 +5,7 @@
 import { detectLocale, formatBytes, formatMs, t, type Locale, type MessageKey } from '../shared/i18n';
 import { jobStorageKey } from '../shared/messages';
 import { SITES, detectSite, extractConversationId } from '../shared/sites';
-import type { ExportFormat, JobKind, JobState, VerificationCheck } from '../shared/types';
+import type { ExportFormat, JobKind, JobState, MdImageMode, VerificationCheck } from '../shared/types';
 import { checkText } from '../export/report';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
 
@@ -58,7 +58,7 @@ const ICONS = {
 
 function setEnabled(on: boolean): void {
   enabled = on;
-  const busy = !!current && !['done', 'error', 'print'].includes(current.phase);
+  const busy = !!current && !['done', 'error', 'print', 'choose'].includes(current.phase);
   for (const el of document.querySelectorAll<HTMLButtonElement>('#handoffBtn, .fmt')) el.disabled = !on || busy;
 }
 
@@ -104,8 +104,12 @@ async function init(): Promise<void> {
     if (id != null) void chrome.runtime.sendMessage({ type: 'show-download', downloadId: id });
   });
   $('retryBtn').addEventListener('click', () => {
-    if (current) start(current.kind, current.format);
+    if (current) start(current.kind, current.format, current.mdImages);
   });
+  // Markdown export of a chat with images: the user picks how to save them, then it runs again.
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#choices .choice')) {
+    b.addEventListener('click', () => start('export', 'md', b.dataset.md as MdImageMode));
+  }
 
   // Resolve the tab: the active tab normally; ?tabId= is used by automated tests.
   const q = new URLSearchParams(location.search).get('tabId');
@@ -164,10 +168,10 @@ function showNotice(title: string, desc: string, links: boolean): void {
   }
 }
 
-async function start(kind: JobKind, format?: ExportFormat): Promise<void> {
+async function start(kind: JobKind, format?: ExportFormat, mdImages?: MdImageMode): Promise<void> {
   if (tabId == null || !enabled) return;
   showDetails = false;
-  const res = (await chrome.runtime.sendMessage({ type: 'start-job', kind, format, tabId, locale }).catch((e) => ({ ok: false, error: String(e) }))) as {
+  const res = (await chrome.runtime.sendMessage({ type: 'start-job', kind, format, tabId, locale, mdImages }).catch((e) => ({ ok: false, error: String(e) }))) as {
     ok: boolean;
     error?: string;
   };
@@ -236,6 +240,8 @@ function render(job: JobState | null): void {
   const open = $('openBtn');
   const retry = $('retryBtn');
   const checks = $<HTMLUListElement>('checks');
+  const choices = $('choices');
+  choices.hidden = true;
   sub.textContent = '';
   timings.innerHTML = '';
   details.hidden = true;
@@ -245,8 +251,17 @@ function render(job: JobState | null): void {
   progress.hidden = true;
   box.dataset.level = '';
 
-  const running = !['done', 'error', 'print'].includes(job.phase);
-  if (running) {
+  const running = !['done', 'error', 'print', 'choose'].includes(job.phase);
+  if (job.phase === 'choose') {
+    box.dataset.level = 'warning';
+    setIcon(icon, 'warn');
+    text.textContent = t(locale, 'choose.md.title');
+    sub.textContent = t(locale, 'choose.md.desc', { n: job.choice?.images ?? 0 });
+    // The status sits at the bottom of the popup: bring the question into view once.
+    if (choices.dataset.for !== job.id) requestAnimationFrame(() => choices.scrollIntoView({ block: 'end', behavior: 'smooth' }));
+    choices.dataset.for = job.id;
+    choices.hidden = false;
+  } else if (running) {
     setIcon(icon, 'spin');
     const key: MessageKey =
       job.phase === 'collecting' || job.phase === 'queued'

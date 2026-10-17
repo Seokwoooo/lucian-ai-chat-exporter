@@ -169,8 +169,13 @@ async function runAndWait(tabId: number, selector: string, timeoutMs = 60_000): 
   }
   await popup.click(selector);
   log('clicked', selector);
-  const job = await waitJob(tabId, (j) => j.startedAt >= t0 - 50 && ['done', 'error', 'print'].includes(j.phase) && (j.phase !== 'print' || !!j.result), timeoutMs);
+  const job = await waitJob(tabId, (j) => j.startedAt >= t0 - 50 && ['done', 'error', 'print', 'choose'].includes(j.phase) && (j.phase !== 'print' || !!j.result), timeoutMs);
   return { job, ms: Date.now() - t0 };
+}
+
+/** Every image a Markdown file links (relative paths), resolved against `dir`. */
+function linkedImages(md: string, dir: string): Array<{ link: string; exists: boolean }> {
+  return [...md.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => ({ link: m[1], exists: !/^https?:/.test(m[1]) && existsSync(join(dir, decodeURIComponent(m[1]))) }));
 }
 
 const describeIf = CHROME && existsSync(join(DIST, 'manifest.json')) ? describe : describe.skip;
@@ -305,6 +310,14 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
           return { x: r.x, y: r.y, width: r.width, height: r.height };
         });
         await page.screenshot({ path: join(SHOTS, 'page-button-done.png'), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 32 } });
+        // Markdown from the panel: the same choice appears there, and the answer is carried out.
+        const t1 = Date.now();
+        await page.evaluate(() => (document.querySelector('[data-lucian-panel]')!.shadowRoot!.querySelector('.fmt[data-format="md"]') as HTMLButtonElement).click());
+        await page.waitForFunction(() => document.querySelector('[data-lucian-panel]')?.shadowRoot?.querySelectorAll('.status .choice').length === 3, { timeout: 15_000 });
+        await page.evaluate(() => (document.querySelector('[data-lucian-panel]')!.shadowRoot!.querySelector('.choice[data-md="zip"]') as HTMLButtonElement).click());
+        const mdJob = await waitJob(tabId, (j) => j.startedAt >= t1 && j.mdImages === 'zip' && ['done', 'error'].includes(j.phase));
+        expect(mdJob.phase, JSON.stringify(mdJob.error)).toBe('done');
+        expect(mdJob.result?.filename).toMatch(/\.zip$/);
       }
       await page.keyboard.press('Escape');
       expect(await page.$eval('[data-lucian-panel]', (h) => (h.shadowRoot!.querySelector('.panel') as HTMLElement).hidden)).toBe(true);
@@ -377,7 +390,47 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       }
 
       for (const format of ['md', 'docx', 'hwpx', 'html', 'txt', 'json', 'zip'] as const) {
-        const r = await runAndWait(tabId, `.fmt[data-format="${format}"]`);
+        let r = await runAndWait(tabId, `.fmt[data-format="${format}"]`);
+        // A Markdown file cannot hold images: the popup asks how to save them (v1.3.6). Each answer
+        // is checked here; the generic checks below run on the last one ("leave images out").
+        if (format === 'md' && r.job.phase === 'choose') {
+          expect(r.job.choice?.images, site).toBeGreaterThan(0);
+          expect(await popup.$$eval('#choices:not([hidden]) .choice', (b) => b.length), site).toBe(3);
+          if (site === 'chatgpt') {
+            await freezeVisual(popup);
+            await popup.screenshot({ path: join(SHOTS, 'popup-md-choice.png'), fullPage: true });
+          }
+          const z = await runAndWait(tabId, '#choices .choice[data-md="zip"]');
+          expect(z.job.phase, `${site}/md-zip: ${JSON.stringify(z.job.error)}`).toBe('done');
+          const zipFile = newestDownload('zip', z.job.startedAt);
+          const zip = unzipSync(new Uint8Array(readFileSync(zipFile)));
+          const mdName = Object.keys(zip).find((n) => n.endsWith('.md'))!;
+          const zdir = mkdtempSync(join(tmpdir(), 'lucian-mdzip-'));
+          for (const [n, b] of Object.entries(zip)) {
+            mkdirSync(join(zdir, n, '..'), { recursive: true });
+            writeFileSync(join(zdir, n), b);
+          }
+          const zlinks = linkedImages(strFromU8(zip[mdName]), join(zdir, mdName, '..'));
+          expect(zlinks.length, `${site}/md-zip links`).toBe(r.job.choice!.images - (z.job.result!.verification.counts.imagesMissing ?? 0));
+          expect(zlinks.filter((l) => !l.exists), `${site}/md-zip broken links`).toEqual([]);
+          expect(z.job.result!.verification.checks.filter((c) => c.status === 'fail'), `${site}/md-zip`).toEqual([]);
+
+          // Once answered, the popup shows the result; each answer starts from the Markdown button.
+          expect((await runAndWait(tabId, '.fmt[data-format="md"]')).job.phase).toBe('choose');
+          const f = await runAndWait(tabId, '#choices .choice[data-md="folder"]');
+          expect(f.job.phase, `${site}/md-folder: ${JSON.stringify(f.job.error)}`).toBe('done');
+          const fmd = readFileSync(newestDownload('md', f.job.startedAt), 'utf8');
+          const flinks = linkedImages(fmd, downloads);
+          expect(flinks.length, `${site}/md-folder links`).toBeGreaterThan(0);
+          expect(flinks.filter((l) => !l.exists), `${site}/md-folder broken links`).toEqual([]);
+          expect(f.job.result!.verification.checks.find((c) => c.code === 'images.folder')?.status, `${site}/md-folder`).toBe('pass');
+
+          expect((await runAndWait(tabId, '.fmt[data-format="md"]')).job.phase).toBe('choose');
+          r = await runAndWait(tabId, '#choices .choice[data-md="none"]');
+          expect(r.job.result!.verification.checks.find((c) => c.code === 'images.omitted')?.status, `${site}/md-none`).toBe('info');
+          expect(readFileSync(newestDownload('md', r.job.startedAt), 'utf8'), `${site}/md-none`).not.toMatch(/!\[[^\]]*\]\(https?:/);
+          report.push({ site, kind: 'md images', zip: zlinks.length, folder: flinks.length, zipMs: z.ms, folderMs: f.ms });
+        }
         expect(r.job.phase, `${site}/${format}: ${JSON.stringify(r.job.error)}`).toBe('done');
         const v = r.job.result!.verification;
         const failed = v.checks.filter((c) => c.status === 'fail');

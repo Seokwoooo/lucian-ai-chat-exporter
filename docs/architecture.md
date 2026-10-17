@@ -73,6 +73,11 @@ popup.html — 두 영역(인수인계 / 내보내기), 진행 상태, 검증 �
 - `docx.ts` → `docx` 라이브러리. 맑은 고딕/Consolas, 코드 상자, 표, 이미지 비율 유지.
 - `hwpx/` → 직접 작성한 OWPML 패키지: `mimetype`(무압축, 첫 항목), `version.xml`, `META-INF/container.xml·manifest.xml`, `Contents/content.hpf·header.xml·section0.xml`, `BinData/`. 공식 XSD로 검증합니다.
 - `pipeline.ts` → 형식 선택, ZIP 백업 구성(`conversation.md/html/json`, `images/`, `attachments/`, `verification-report.*`).
+- **Markdown과 이미지 (v1.3.6)**: 서비스의 이미지 주소는 로그인한 브라우저에서만 열려서(ChatGPT `estuary/content`, Claude `files/…/preview` 모두 쿠키 없이 403), Markdown에 링크만 남기면 다른 프로그램에서는 보이지 않습니다. 이미지가 있는 대화의 Markdown 작업은 대화를 모은 뒤 `choose` 단계에서 멈추고(종료 상태), 팝업과 답변 아래 패널이 세 가지 선택지를 보여 줍니다. 고르면 `mdImages`를 붙여 새 작업을 시작합니다. 서비스 워커가 답을 기다리지 않으므로, 기다리는 동안 워커가 내려가도 문제가 없습니다.
+  - `zip`: `제목/제목.md` + `제목/images/image-001.png`, 상대 경로 링크.
+  - `folder`: `제목.md`와 `제목_files/image-001-<내용 해시>.png`를 따로 다운로드합니다. 이미지가 먼저 저장되고, 같은 대화를 다시 내보내면 같은 이름·같은 내용이라 덮어씁니다(`conflictAction: 'overwrite'`). 그래서 `… (1).png`로 링크가 깨지지 않습니다. 각 이미지가 `.md`와 같은 폴더 아래 `제목_files/`에 실제로 저장됐는지 다운로드 경로로 확인합니다.
+  - `none`: `.md`만. 이미지 자리는 `*[이미지: 설명]*`입니다.
+  - 받지 못한 이미지는 죽은 링크 대신 `*[이미지를 가져오지 못했습니다: 설명]*`로 남기고 경고합니다.
 - `verify.ts` → 원본 대비 메시지 수, 이미지·첨부·수식·표·코드 수, 출력 파일 무결성(ZIP·XML 파싱), 다운로드 크기. 결과는 `pass / info / warn / fail`이고 가장 나쁜 값이 전체 수준이 됩니다.
 - 사고 과정은 문서에서 빼고 JSON·ZIP에만 남깁니다. 2,000자를 넘는 도구 출력은 문서에 앞부분만 넣고 JSON·ZIP에는 전부 남깁니다. 두 경우 모두 검증 결과에 표시합니다.
 

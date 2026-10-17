@@ -82,6 +82,50 @@ describe('file names and pasted text (v1.3.5)', () => {
   });
 });
 
+describe('Markdown with images: the user chooses ZIP, a folder, or none (v1.3.6)', () => {
+  const stem = '한국어English-혼합-테스트-대화-—-코드·표·수식';
+
+  it('zip: the .md and an images folder in one ZIP, linked by relative paths', async () => {
+    const out = await runExport({ ...input('md'), mdImages: 'zip' });
+    expect(out.filename).toBe(`${stem}.zip`);
+    expect(out.mime).toBe('application/zip');
+    const files = unzipSync(out.bytes);
+    const md = strFromU8(files[`${stem}/${stem}.md`]);
+    expect(Object.keys(files).filter((f) => f.startsWith(`${stem}/images/`))).toHaveLength(2);
+    for (const link of md.match(/!\[[^\]]*\]\(([^)]+)\)/g) ?? []) {
+      const target = /\(([^)]+)\)/.exec(link)![1];
+      expect(files[`${stem}/${target}`], target).toBeDefined();
+    }
+    expect(md).not.toContain('files.example-cdn.test');
+    // The image the service would not give is a visible note, not a dead link.
+    expect(md).toContain('*[이미지를 가져오지 못했습니다: old]*');
+    expect(out.verification.checks.find((c) => c.code === 'images.missing')).toMatchObject({ status: 'warn', params: { missing: 1, total: 3 } });
+  });
+
+  it('folder: the .md links "<title>_files/…" and the images come back as files to save next to it', async () => {
+    const out = await runExport({ ...input('md'), mdImages: 'folder' });
+    expect(out.filename).toBe(`${stem}.md`);
+    const md = strFromU8(out.bytes);
+    const names = out.extraFiles!.map((f) => f.filename);
+    expect(names).toHaveLength(2);
+    for (const n of names) expect(n).toMatch(new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_files/image-00\\d-[0-9a-f]{8}\\.png$`));
+    for (const n of names) expect(md).toContain(`](${n})`);
+    // Same chat, same images: same names, so saving again overwrites instead of breaking links.
+    const again = await runExport({ ...input('md'), mdImages: 'folder' });
+    expect(again.extraFiles!.map((f) => f.filename)).toEqual(names);
+  });
+
+  it('none: only the .md, with [이미지] notes instead of links that need a login', async () => {
+    const out = await runExport({ ...input('md'), mdImages: 'none' });
+    const md = strFromU8(out.bytes);
+    expect(md).not.toMatch(/!\[[^\]]*\]\(https?:/);
+    expect(md).toContain('*[이미지: screenshot]*');
+    expect(md).toContain('*[이미지: chart]*');
+    expect(out.extraFiles).toBeUndefined();
+    expect(out.verification.checks.find((c) => c.code === 'images.omitted')).toMatchObject({ status: 'info', params: { total: 3 } });
+  });
+});
+
 describe('math', () => {
   it('renders LaTeX to MathML and reports failures', () => {
     expect(renderMathMl('\\frac{1}{2}', false)).toContain('<math');

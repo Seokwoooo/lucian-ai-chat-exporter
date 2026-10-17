@@ -92,6 +92,9 @@ popup            src/popup/*                two cards: handoff button, export fo
 - Before releasing a change to collection or the handoff engine, run it on real conversations the
   way users do (in-app navigation, the in-page panel), export JSON + handoff for each, and run
   `npm run check:real` on that folder. Mock E2E alone missed the hidden-conversation bug (v1.3.2).
+- Markdown cannot hold images and service image URLs need the user's login: a Markdown export of a
+  chat with images stops in phase `choose` and the popup / page panel ask zip | folder | none
+  (`mdImages`, v1.3.6). Never leave unusable image links without saying so.
 - Documents show what the user saw: thinking is excluded (JSON/ZIP keep it), long tool output is
   clipped to `TOOL_DOC_LIMIT` with a visible note, uncited search results go to `moreSources`
   (JSON/ZIP only); every such decision is reported in verification.

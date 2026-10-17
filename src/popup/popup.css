@@ -156,6 +156,15 @@ body[data-ready] .more svg { transition: transform .2s ease; }
 .progress-bar { height: 100%; width: 30%; background: var(--text); border-radius: 3px; transition: width .2s ease; }
 .progress[data-indeterminate="true"] .progress-bar { width: 30%; animation: slide 1.1s ease-in-out infinite; }
 .status-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+/* Markdown export of a chat with images: how to save them (v1.3.6). */
+.choices { display: flex; flex-direction: column; gap: 6px; }
+.choices[hidden] { display: none; }
+.choice { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; cursor: pointer; }
+.choice b { font-size: 12.5px; font-weight: 650; }
+.choice span { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.choice:hover { background: var(--surface-hover); border-color: var(--faint); }
+.choice:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.choice:disabled { opacity: .45; cursor: default; }
 .status-actions:not(:has(button:not([hidden]))) { display: none; }
 .link-btn { border: 0; background: none; padding: 0; color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--faint); }
 .link-btn:hover { text-decoration-color: var(--text); }

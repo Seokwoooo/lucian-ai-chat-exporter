@@ -212,10 +212,12 @@ async function buildExport(req: BuildRequest, conv: Conversation, t0: number): P
     parseHtml: (s) => parser.parseFromString(s, 'text/html'),
     appVersion: req.appVersion,
     onProgress: percentReporter(req.jobId, format),
+    mdImages: req.mdImages,
   });
   return {
     ok: true,
     blobUrl: blobUrl(out.bytes, out.mime),
+    extraFiles: out.extraFiles?.map((f) => ({ blobUrl: blobUrl(f.bytes, f.mime), filename: f.filename, bytes: f.bytes.byteLength })),
     filename: out.filename,
     mime: out.mime,
     bytes: out.bytes.byteLength,

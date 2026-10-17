@@ -41,6 +41,12 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 | **PDF** · **Markdown** · **Word (.docx)** | **한글 (HWPX)** · HTML · TXT · JSON · **ZIP 전체 백업** |
 
 - **PDF**: Chrome의 인쇄 엔진으로 내 컴퓨터에서 만듭니다. 인쇄 창의 대상에서 “PDF로 저장”을 고르면 됩니다. 한글 글꼴, 표, 코드, 수식, 이미지가 그대로 나오고, 외부 PDF 서버는 쓰지 않습니다.
+- **Markdown과 이미지 (v1.3.6)**: Markdown 파일 자체에는 이미지를 넣을 수 없습니다. 서비스의 이미지 주소는 그 서비스에 로그인한 브라우저에서만 열리기 때문에(로그인 없이 열면 거부됨), 링크만 남기면 다른 프로그램에서는 이미지가 보이지 않습니다. 그래서 이미지가 있는 대화를 Markdown으로 내보내면 매번 고르게 합니다.
+  - **ZIP으로 묶기**: `.md`와 `images/` 폴더를 ZIP 하나로 저장합니다. 압축을 풀면 Obsidian·VS Code·GitHub 등 어디서나 이미지가 보입니다.
+  - **이미지 폴더 따로 저장**: `.md` 옆에 `제목_files/` 폴더를 만들어 이미지를 저장합니다(Chrome의 "웹페이지 전체 저장"과 같은 방식). 이미지마다 다운로드가 하나씩 생기고, Chrome에서 저장 위치를 매번 묻게 해 두었다면 창이 여러 번 뜹니다.
+  - **이미지는 넣지 않기**: `.md`만 저장하고 이미지 자리에는 `[이미지: 설명]`만 남깁니다.
+
+  <img src="docs/images/popup-md-choice.png" alt="Markdown 이미지 저장 방식 선택" width="320">
 - **HWPX**: 직접 생성한 OWPML 패키지입니다. 확장자만 바꾼 파일이 아니며, 공식 OWPML XSD 스키마 검증을 통과합니다.
 - **ZIP 전체 백업**: `conversation.md/html/json`, `images/`, `attachments/`, `verification-report.md/json`을 담습니다. 받지 못한 이미지·첨부는 보고서에 명시합니다.
 - 내보낼 때마다 **검증 결과**를 보여 줍니다. 원본 메시지 수 대비 추출 수, 이미지 포함 여부, 첨부 저장 여부, 수식 렌더링, 파일 무결성(ZIP·XML 파싱, 다운로드 크기 일치)을 확인하고, 빠진 것이 있으면 경고나 실패로 표시합니다.
@@ -53,7 +59,7 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 ### 릴리스 ZIP으로 설치 (개발자 모드)
 
-1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.3.5.zip`을 받아 압축을 풉니다.
+1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.3.6.zip`을 받아 압축을 풉니다.
 2. Chrome 주소창에 `chrome://extensions`를 입력합니다.
 3. 오른쪽 위 **개발자 모드**를 켭니다.
 4. **압축해제된 확장 프로그램을 로드합니다**를 누르고, 압축을 푼 폴더(`manifest.json`이 있는 폴더)를 고릅니다.
@@ -157,7 +163,7 @@ ChatGPT·OpenAI, Claude·Anthropic, Gemini·Google, Grok·xAI의 이름과 로�
 **Lucian AI Chat Exporter** is a Chrome extension (Manifest V3) for ChatGPT, Claude, Gemini and Grok with exactly two features:
 
 1. **Handoff to another AI** — one click saves `<chat-title>-lucian-handoff-YYYY-MM-DD.md`. It starts with instructions for the AI that reads it, followed by source info, the goal and request flow (every later request in order, with a one-line gist of each answer in long chats), confirmed decisions (latest first, older ones kept), instructions and constraints, completed work, current state, open problems, next steps, failure causes, key code and files, links, important context (verbatim excerpts) and the transcript (full for short chats, recent for long ones). Empty sections are left out. It is **extractive and rule-based**: no LLM, no embeddings, no external API. Every line points back to `[#mN]`, and uncertain judgements are marked ⚠️ instead of guessed. Noise is kept out: uncited search results, tracking parameters, citation chips and UI markup are dropped, each sentence appears in one section only, near-identical requests collapse into one line, a revised draft appears once (earlier versions keep only the lines that changed, v1.3.4), attached files and pasted text are included verbatim (head and tail when long; files without text are listed, v1.3.5), short chats get a short index above the full transcript instead of a second copy, and every section has a token share of the budget. Earlier context is chosen by budgeted maximum coverage (the verbatim sentences that add the most not-yet-covered concepts per token), and the middle of very long messages competes for the budget instead of being cut away — chosen by comparing 19 algorithms on 27 of the author's real ChatGPT conversations; in v1.3 the budget split was re-tuned with a QA evaluation (a reader AI answers questions from the handoff alone: 78.8% → 97.6% correct at the default budget on synthetic chats) ([compression lab](docs/compression-lab.md)). A 1M-token conversation (3,782 messages) is processed in **0.72 s** (0.49 s with the incremental cache) inside Chrome.
-2. **Full export** — PDF (Chrome's print engine, locally), Markdown and Word. **More formats** adds real HWPX (OWPML, validated against the official XSD), HTML, TXT, JSON and a ZIP backup with images, attachments and a verification report. Each export is verified: source message count vs. exported, images, attachments, math, and file integrity. Gaps are reported, never hidden.
+2. **Full export** — PDF (Chrome's print engine, locally), Markdown and Word. **More formats** adds real HWPX (OWPML, validated against the official XSD), HTML, TXT, JSON and a ZIP backup with images, attachments and a verification report. Each export is verified: source message count vs. exported, images, attachments, math, and file integrity. Gaps are reported, never hidden. A Markdown file cannot hold images (and service image links open only while logged in), so for chats with images you choose each time: one ZIP with the .md and an images folder, an image folder next to the .md, or no images (v1.3.6).
 
 Both features open from a small **Lucian button under every finished answer** (next to copy/retry, with a soft violet–cyan glow) and from the toolbar icon. Long jobs show “Processing… (n% done)”. A small illustration above the handoff button (this service's logo → curved arrow → the other services) shows what a handoff is. Documents list the sources an answer actually cited; uncited search results stay in the JSON/ZIP backup.
 

@@ -3,7 +3,7 @@
 
 import { unzipSync, strFromU8 } from 'fflate';
 import type { AssetStatus } from '../shared/messages';
-import type { Conversation, ExportFormat, Verification, VerificationCheck, VerificationCounts } from '../shared/types';
+import type { Conversation, ExportFormat, MdImageMode, Verification, VerificationCheck, VerificationCounts } from '../shared/types';
 import { countAttachments, countImageRefs } from './images';
 import { TOOL_DOC_LIMIT } from './markdown';
 import { lex, statsOf } from './md-parse';
@@ -54,7 +54,7 @@ function contentStats(conv: Conversation) {
 export function buildVerification(
   conv: Conversation,
   format: ExportFormat | 'handoff',
-  opts: { assets?: AssetStatus[]; stats?: FormatStats; output?: OutputCheck; formatLabel?: string } = {},
+  opts: { assets?: AssetStatus[]; stats?: FormatStats; output?: OutputCheck; formatLabel?: string; mdImages?: MdImageMode } = {},
 ): Verification {
   const checks: VerificationCheck[] = [];
   const ex = conv.extraction;
@@ -94,7 +94,8 @@ export function buildVerification(
   let imagesEmbedded = 0;
   let imagesMissing = 0;
   if (format !== 'handoff') {
-    if (RICH.includes(format as ExportFormat)) {
+    // Markdown saved with its images (ZIP or a folder next to it) is checked like a rich format.
+    if (RICH.includes(format as ExportFormat) || opts.mdImages === 'zip' || opts.mdImages === 'folder') {
       const assetImages = (opts.assets ?? []).filter((a) => a.kind === 'image');
       const failed = assetImages.filter((a) => !a.ok).length;
       imagesMissing = Math.max(failed, st.imagesMissing ?? 0);
@@ -103,6 +104,8 @@ export function buildVerification(
         /* nothing to report */
       } else if (imagesMissing === 0) checks.push({ code: 'images.all', status: 'pass', params: { total: imageTotal } });
       else checks.push({ code: 'images.missing', status: 'warn', params: { missing: imagesMissing, total: imageTotal } });
+    } else if (imageTotal > 0 && opts.mdImages === 'none') {
+      checks.push({ code: 'images.omitted', status: 'info', params: { total: imageTotal } });
     } else if (imageTotal > 0) {
       checks.push({ code: 'images.linked', status: 'info', params: { total: imageTotal } });
     }

@@ -142,8 +142,16 @@ export type JobPhase =
   | 'processing'
   | 'downloading'
   | 'print'
+  /** Waiting for the user: a Markdown export of a chat with images asks how to save them (v1.3.6). */
+  | 'choose'
   | 'done'
   | 'error';
+
+/**
+ * How a Markdown export saves the chat's images (asked each time, v1.3.6): one ZIP with the .md and
+ * an images folder, the .md plus a "<title>_files" folder next to it, or the .md alone.
+ */
+export type MdImageMode = 'zip' | 'folder' | 'none';
 
 export type CheckStatus = 'pass' | 'warn' | 'fail' | 'info';
 
@@ -231,4 +239,8 @@ export interface JobState {
   error?: { code: string; message?: string };
   startedAt: number;
   finishedAt?: number;
+  /** Markdown image mode the job runs with (after the user chose). */
+  mdImages?: MdImageMode;
+  /** Set with phase 'choose': what the user is asked. */
+  choice?: { kind: 'md-images'; images: number };
 }

@@ -6,14 +6,15 @@
 
 import { checkText } from '../export/report';
 import { detectLocale, formatBytes, t, type Locale, type MessageKey } from '../shared/i18n';
-import type { ExportFormat, JobKind, JobState } from '../shared/types';
+import type { ExportFormat, JobKind, JobState, MdImageMode } from '../shared/types';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
 import type { SiteAdapter } from './adapters/types';
 
 const HOST_ATTR = 'data-lucian-action';
 const PRIMARY: ExportFormat[] = ['pdf', 'md', 'docx'];
 const MORE: ExportFormat[] = ['hwpx', 'html', 'txt', 'json', 'zip'];
-const TERMINAL = ['done', 'error', 'print'];
+// 'choose': a Markdown export of a chat with images waits for the user's choice (v1.3.6).
+const TERMINAL = ['done', 'error', 'print', 'choose'];
 
 // The mark is drawn with a violet → cyan gradient (the same family as the illustration's arc).
 const LOGO =
@@ -112,6 +113,12 @@ button:disabled { opacity: .45; cursor: default; }
 .status .sub { color: var(--muted); font-size: 12px; }
 .status ul { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
 .status .actions { margin-top: 6px; display: flex; gap: 6px; }
+.status .choices { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.choice { all: unset; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
+.choice b { font-size: 12.5px; font-weight: 650; color: var(--text); }
+.choice span { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+.choice:hover { background: var(--surface-hover); }
+.choice:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
 .status .bar { margin-top: 7px; height: 4px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; }
 .status .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7c5cff, #22d3ee); transition: width .25s ease; }
 .link { all: unset; color: var(--text); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
@@ -244,6 +251,16 @@ export function initPageUi(adapter: SiteAdapter): void {
         pct = Math.round((p.done / p.total) * 100);
         extra += '<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>';
       }
+    } else if (job.phase === 'choose') {
+      // A Markdown file cannot hold images: the user picks ZIP, a folder next to it, or none.
+      box.dataset.level = 'warning';
+      icon = ICON.warn;
+      iconKind = 'warn';
+      title = tr('choose.md.title');
+      sub = tr('choose.md.desc', { n: job.choice?.images ?? 0 });
+      extra += `<div class="choices" role="group">${(['zip', 'folder', 'none'] as const)
+        .map((m) => `<button type="button" class="choice" data-md="${m}"><b>${escapeText(tr(`choose.md.${m}` as MessageKey))}</b><span>${escapeText(tr(`choose.md.${m}Desc` as MessageKey))}</span></button>`)
+        .join('')}</div>`;
     } else if (job.phase === 'error') {
       box.dataset.level = 'error';
       icon = ICON.err;
@@ -376,6 +393,10 @@ export function initPageUi(adapter: SiteAdapter): void {
     if (panelOpen()) {
       updatePanel();
       position();
+    } else if (announce && wasRunning && !running && job?.phase === 'choose') {
+      // The export cannot go on without an answer: show the choice where the user clicked.
+      const at = anchor?.isConnected ? anchor : [...triggers].find((b) => b.isConnected);
+      if (at) openPanel(at);
     } else if (announce && wasRunning && !running && job) {
       toast(job);
     }
@@ -397,8 +418,8 @@ export function initPageUi(adapter: SiteAdapter): void {
     }, 450);
   }
 
-  const start = async (kind: JobKind, format?: ExportFormat) => {
-    const res = (await chrome.runtime.sendMessage({ type: 'start-job', kind, format, locale }).catch(() => ({ ok: false, error: 'CONTENT_UNAVAILABLE' }))) as {
+  const start = async (kind: JobKind, format?: ExportFormat, mdImages?: MdImageMode) => {
+    const res = (await chrome.runtime.sendMessage({ type: 'start-job', kind, format, locale, mdImages }).catch(() => ({ ok: false, error: 'CONTENT_UNAVAILABLE' }))) as {
       ok: boolean;
       error?: string;
     };
@@ -409,12 +430,15 @@ export function initPageUi(adapter: SiteAdapter): void {
     applyJob({ id: 'pending', kind, format, tabId: -1, phase: 'collecting', timings: {}, startedAt: Date.now() }, false);
   };
 
-  let lastAction: { kind: JobKind; format?: ExportFormat } | null = null;
+  let lastAction: { kind: JobKind; format?: ExportFormat; mdImages?: MdImageMode } | null = null;
   const onPanelClick = (e: Event) => {
-    const el = (e.target as Element).closest<HTMLElement>('[data-act], [data-format]');
+    const el = (e.target as Element).closest<HTMLElement>('[data-act], [data-format], [data-md]');
     if (!el || (el as HTMLButtonElement).disabled) return;
     const act = el.dataset.act;
-    if (el.dataset.format) {
+    if (el.dataset.md) {
+      lastAction = { kind: 'export', format: 'md', mdImages: el.dataset.md as MdImageMode };
+      void start('export', 'md', lastAction.mdImages);
+    } else if (el.dataset.format) {
       lastAction = { kind: 'export', format: el.dataset.format as ExportFormat };
       void start('export', lastAction.format);
     } else if (act === 'handoff') {
@@ -430,7 +454,7 @@ export function initPageUi(adapter: SiteAdapter): void {
     } else if (act === 'show' && job?.result?.downloadId != null) {
       void chrome.runtime.sendMessage({ type: 'show-download', downloadId: job.result.downloadId });
     } else if (act === 'retry' && lastAction) {
-      void start(lastAction.kind, lastAction.format);
+      void start(lastAction.kind, lastAction.format, lastAction.mdImages);
     }
   };
 

@@ -12,6 +12,12 @@ export interface MdOptions {
   imageHref?: (url: string) => string | undefined;
   /** Link target for an attachment saved alongside the document. */
   attachmentHref?: (key: string) => string | undefined;
+  /**
+   * Images imageHref does not map: keep the service URL ('link', which needs the user's login), or
+   * write a text note — '[이미지: …]' when images are left out by choice ('omit'), or "could not be
+   * fetched" when they were meant to be saved ('missing'). v1.3.6
+   */
+  unmappedImage?: 'link' | 'omit' | 'missing';
 }
 
 export interface MdResult {
@@ -57,14 +63,33 @@ function replaceOutsideInlineCode(text: string, fn: (s: string) => string): stri
   return parts.map((p, i) => (i % 2 === 1 ? p : fn(p))).join('');
 }
 
-export function rewriteInlineImages(md: string, imageHref?: (url: string) => string | undefined): string {
-  if (!imageHref) return md;
+export function rewriteInlineImages(md: string, imageHref?: (url: string) => string | undefined, unmapped?: (alt: string) => string | undefined): string {
+  if (!imageHref && !unmapped) return md;
   return replaceOutsideCode(md, (seg) =>
     seg.replace(/!\[([^\]]*)\]\((\S+?)(\s+"[^"]*")?\)/g, (all, alt: string, url: string, title?: string) => {
-      const next = imageHref(url);
-      return next ? `![${alt}](${next}${title ?? ''})` : all;
+      const next = imageHref?.(url);
+      if (next) return `![${alt}](${next}${title ?? ''})`;
+      return unmapped?.(alt) ?? all;
     }),
   );
+}
+
+/** One image as Markdown: a local copy, the service URL, or a text note (see MdOptions.unmappedImage). */
+function imageMarkdown(url: string, alt: string | undefined, opts: MdOptions): string {
+  const L = opts.locale;
+  const label = (alt ?? t(L, 'doc.image')).replace(/[[\]\n]/g, ' ');
+  const href = opts.imageHref?.(url);
+  if (href) return `![${label}](${href})`;
+  return unmappedNote(alt, opts) ?? `![${label}](${url})`;
+}
+
+function unmappedNote(alt: string | undefined, opts: MdOptions): string | undefined {
+  const L = opts.locale;
+  const a = (alt ?? '').replace(/[[\]\n*_]/g, ' ').replace(/\s+/g, ' ').trim();
+  const short = a.length > 80 ? `${a.slice(0, 79)}…` : a;
+  if (opts.unmappedImage === 'omit') return `*[${t(L, 'doc.image')}${short ? `: ${short}` : ''}]*`;
+  if (opts.unmappedImage === 'missing') return `*[${t(L, 'doc.imageMissing')}${short ? `: ${short}` : ''}]*`;
+  return undefined;
 }
 
 function sizeLabel(n?: number): string {
@@ -76,7 +101,7 @@ export function contentToMarkdown(c: ExportContent, opts: MdOptions): string {
   switch (c.type) {
     case 'text':
     case 'markdown':
-      return rewriteInlineImages(c.content ?? '', opts.imageHref);
+      return rewriteInlineImages(c.content ?? '', opts.imageHref, opts.unmappedImage && opts.unmappedImage !== 'link' ? (alt) => unmappedNote(alt || undefined, opts) : undefined);
     case 'thinking': {
       if (!opts.includeThinking) return '';
       return `<details>\n<summary>${t(L, 'doc.thinking')}</summary>\n\n${c.content ?? ''}\n\n</details>`;
@@ -99,17 +124,13 @@ export function contentToMarkdown(c: ExportContent, opts: MdOptions): string {
       const lang = c.type === 'html_widget' ? 'html' : c.language ?? '';
       return `**${t(L, 'doc.artifact')} · ${c.title ?? ''}**\n\n${f}${lang}\n${code.replace(/\n$/, '')}\n${f}`;
     }
-    case 'image': {
-      if (!c.imageUrl) return '';
-      const href = opts.imageHref?.(c.imageUrl) ?? c.imageUrl;
-      return `![${(c.alt ?? t(L, 'doc.image')).replace(/[[\]\n]/g, ' ')}](${href})`;
-    }
+    case 'image':
+      return c.imageUrl ? imageMarkdown(c.imageUrl, c.alt, opts) : '';
     case 'image_group':
       return (c.imageGroup?.images ?? [])
         .map((img) => {
           const url = img.imageUrl ?? img.thumbnailUrl;
-          if (!url) return '';
-          return `![${(img.alt ?? t(L, 'doc.image')).replace(/[[\]\n]/g, ' ')}](${opts.imageHref?.(url) ?? url})`;
+          return url ? imageMarkdown(url, img.alt, opts) : '';
         })
         .filter(Boolean)
         .join('\n\n');
