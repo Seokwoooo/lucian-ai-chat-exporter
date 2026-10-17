@@ -5,7 +5,7 @@ import type { CacheMap } from './engine';
 import { NUM_HASHES } from './minhash';
 
 // Bump whenever classify() changes: cached flags from older rules must not be reused.
-export const CACHE_VERSION = 4;
+export const CACHE_VERSION = 5;
 const MAX_ENTRIES = 400_000;
 
 export function encodeCache(key: string, cache: CacheMap): HandoffCacheRecord {

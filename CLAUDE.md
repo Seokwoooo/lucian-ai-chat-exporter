@@ -26,6 +26,7 @@ npm run test:e2e     # builds, then drives Chrome for Testing with the extension
 npm run bench        # handoff performance on ~100k / ~1M token synthetic conversations
 npm run lab          # compression lab on synthetic conversations (algorithms × budgets, retention metrics)
 npm run lab:file -- <in.json> <out.json>  # same lab on a local file of ChatGPT payloads (keep it outside the repo)
+npm run lab:qa -- presence [ratios] [algos]  # QA evaluation on synthetic chats: planted answers present in the document (no AI)
 npm run package      # build + release/lucian-ai-chat-exporter-v<version>.zip
 npm run check        # typecheck + lint + test + build
 ```
@@ -85,7 +86,8 @@ popup            src/popup/*                two cards: handoff button, export fo
   no reading of the conversation until the user clicks. Toolbar selectors live in `actionBars()`.
 - `scripts/compression-lab/` compares selection algorithms; results are in `docs/compression-lab.md`.
   The engine's `DEFAULT_SELECTION` (coverage) and `DEFAULT_LAYOUT` were chosen there — re-run the
-  lab before changing them. Real conversations used for it must never enter the repo (only
+  lab (`npm run lab`, and `npm run lab:qa -- presence` for the QA evaluation; `qa/ask.mjs` uses a reader
+  AI on synthetic documents only) before changing them. Real conversations used for it must never enter the repo (only
   aggregate numbers).
 - `scripts/build.mjs` strips the `new Function` branch from docx's bundled JSZip polyfill; CI fails
   if `eval`/`new Function` appears in `dist/`.

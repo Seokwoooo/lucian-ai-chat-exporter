@@ -34,10 +34,10 @@ const KO = {
   directive:
     /(하자|바꾸자|쓰자|가자|만들자|넣자|빼자|합시다|바꿉시다|갑시다|해\s?줘|해\s?주세요|해\s?주십시오|해\s?주시|하세요|하십시오|해라|해야\s?(해|합니다|함|돼|됩니다|한다)|하도록|만들어|구현해|작성해|추가해|수정해|바꿔|변경해|사용해|써\s?줘|넣어|빼\s?줘|지워|삭제해|적용해|진행해|시작해|유지해|필요(해|합니다|함)|원해|원합니다|바란다|바랍니다|부탁)/,
   prohibit:
-    /(하지\s?마|하지\s?말|말아\s?(줘|주세요|라)|금지|절대\s?(로)?\s?\S*\s?(마|말|안|않|금지)|하면\s?안\s?(돼|됩니다|된다)|쓰지\s?마|사용하지\s?(마|말|않)|넣지\s?(마|말)|추가하지\s?(마|말)|만들지\s?(마|말)|허용하지\s?않|해서는\s?안)/,
+    /((쓰|사용하|도입하|넣|추가하|만들)지\s?않기로|하지\s?마|하지\s?말|말아\s?(줘|주세요|라)|금지|절대\s?(로)?\s?\S*\s?(마|말|안|않|금지)|하면\s?안\s?(돼|됩니다|된다)|쓰지\s?마|사용하지\s?(마|말|않)|넣지\s?(마|말)|추가하지\s?(마|말)|만들지\s?(마|말)|허용하지\s?않|해서는\s?안)/,
   constraint: /(않도록|없이|빼고|제외|만\s?(사용|써|쓰)|반드시|무조건|필수|꼭\s|제한|이하로|이내로|초과하지|넘지\s?않)/,
   decision:
-    /(로\s?하자|으로\s?하자|로\s?결정|으로\s?결정|확정|결정(했|하였|함|합니다|하겠|할게)|로\s?가자|으로\s?가자|로\s?갑시다|으로\s?갑시다|채택|선택(했|함|합니다|하겠|할게)|그걸로|그것으로|이걸로|이것으로|그렇게\s?(하자|해|진행|합시다|가자)|최종(적으로|안|결정)|(로|으로)\s?(진행|구현|개발|만들)(하겠|할게|합니다|하자|하기로)|기로\s?(했|하였|함|하자)|(로|으로)\s?(바꾸자|바꿉시다|변경하자|변경합시다|전환하자|교체하자|갈게|할게|하겠습니다|정하자|정했))/,
+    /(로\s?하자|으로\s?하자|로\s?결정|으로\s?결정|확정|결정(했|하였|함|합니다|하겠|할게)|로\s?가자|으로\s?가자|로\s?갑시다|으로\s?갑시다|(로|으로)\s?(가죠|가요|하죠)(?=[\s.!,]|$)|채택|선택(했|함|합니다|하겠|할게)|그걸로|그것으로|이걸로|이것으로|그렇게\s?(하자|해|진행|합시다|가자)|최종(적으로|안|결정)|(로|으로)\s?(진행|구현|개발|만들)(하겠|할게|합니다|하자|하기로)|기로\s?(했|하였|함|하자|해요|합시다|해(?=[\s.!,]|$))|(로|으로)\s?(바꾸자|바꿉시다|변경하자|변경합시다|전환하자|교체하자|갈게|할게|하겠습니다|정하자|정했))/,
   change:
     /(아니(라|고|요|야)?[,.\s]|아닌|말고|대신(에)?|바꾸|바꿔|변경|정정|취소|철회|오히려|틀렸|잘못|번복|폐기|되돌|원복|다시\s?(하|해|만들|구현))/,
   done:
@@ -63,7 +63,7 @@ const KO = {
 const EN = {
   directive:
     /\b(please|must|should|need(s)? to|make sure|ensure|i want|i need|we need|let'?s|implement|create|add|remove|use|write|build|fix|change|update|keep|don'?t|do not|never|always)\b/i,
-  prohibit: /\b(don'?t|do not|never|must not|mustn'?t|shouldn'?t|should not|avoid|forbidden|prohibited|not allowed|disallow(ed)?|under no circumstances|no (more )?\w+ allowed)\b/i,
+  prohibit: /\b(don'?t|do not|never|must not|mustn'?t|shouldn'?t|should not|avoid|forbidden|prohibited|not allowed|disallow(ed)?|under no circumstances|no (more )?\w+ allowed|(won'?t|will not|are not going to|aren'?t going to) (use|add|adopt|introduce)|decided against|let'?s not (use|add))\b/i,
   constraint: /\b(without|no more than|at most|at least|only use|only|required|mandatory|always|limit(ed)? to|strictly)\b/i,
   decision:
     /\b(let'?s go with|let'?s use|we'?ll use|we will use|decided|decision|going with|go with|final(ly)?|settled on|we chose|chose|opt(ed)? for|switch(ed)? to|confirmed?|agreed|the plan is|we'?ll go with)\b/i,
@@ -202,6 +202,13 @@ export function jaccard(a: string[], b: string[]): number {
   for (const x of b) if (sa.has(x)) inter++;
   return inter / (sa.size + b.length - inter);
 }
+
+/**
+ * Words that turn a change request into a change of an earlier choice ("A 말고 B", "instead of").
+ * Without one, "표 머리글 좀 바꿔 주세요" is an edit request, not a decision.
+ */
+export const REVERSAL_RE =
+  /(말고|대신|(이|가)?\s?아니라|아니고|번복|철회|되돌|원복|\b(instead|rather than|actually|scratch that|on second thought|revert|switch(ed)? (to|from)|replac(e|ed|ing))\b)/i;
 
 /** Pairs of (old, new) phrases expressed in one sentence, e.g. "A 말고 B로", "use B instead of A". */
 export function replacementPairs(text: string): Array<{ old: string[]; neu: string[] }> {

@@ -60,6 +60,8 @@ export interface RecentMessage {
 export interface HandoffDoc {
   lang: 'ko' | 'en';
   mode: 'full' | 'compressed';
+  /** Appendix table of referenced messages that are not in the transcript. */
+  refIndex: boolean;
   conv: Conversation;
   now: number;
   sourceTokens: number;
@@ -98,7 +100,7 @@ const L = {
       '1. 「확정된 주요 결정」과 「사용자 지시사항 · 제한사항」이 있으면 먼저 읽고 반드시 따르세요. 결정이 바뀐 경우 최신 결정이 우선입니다.',
       '2. 「현재 진행 상황」과 「다음에 이어서 할 작업」에서 작업을 이어가세요.',
       '3. ⚠️ 표시는 알고리즘이 확신하지 못한 항목입니다. 진행하기 전에 사용자에게 확인하세요.',
-      '4. `[#m12]`는 원본 대화의 12번째 메시지를 뜻합니다. 대화 원문 섹션이나 부록 색인에서 찾을 수 있습니다.',
+      '4. `[#m12]`는 원본 대화의 12번째 메시지를 뜻합니다.',
       '5. 답변은 사용자가 쓰던 언어로 하세요. 이 문서를 읽은 직후에는 이해한 현재 상태를 짧게 정리하고, 이어서 할 작업을 제안하세요.',
     ],
     introEn:
@@ -164,7 +166,7 @@ const L = {
       '1. If there are “Confirmed decisions” and “User instructions & constraints”, read them first and follow them. When a decision changed, the latest one wins.',
       '2. Continue the work from “Current state” and “Next steps”.',
       '3. Items marked ⚠️ are uncertain for the algorithm — confirm them with the user before acting.',
-      '4. `[#m12]` refers to the 12th message of the original conversation; find it in the transcript section or the appendix index.',
+      '4. `[#m12]` refers to the 12th message of the original conversation.',
       '5. Reply in the user’s language. Right after reading this, briefly summarize the current state as you understand it and propose the next step.',
     ],
     introEn: '',
@@ -465,7 +467,7 @@ export function renderHandoff(doc: HandoffDoc): string {
   // header with role and time). A short conversation in full needs no index at all.
   const inTranscript = new Set(doc.recent.map((r) => r.m));
   const sorted = [...refs].filter((m) => !inTranscript.has(m)).sort((a, b) => a - b);
-  if (sorted.length) {
+  if (sorted.length && doc.refIndex) {
     out.push(`## ${S.refs}`);
     out.push('');
     out.push(S.refsHead);

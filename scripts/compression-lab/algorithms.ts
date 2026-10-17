@@ -2,7 +2,7 @@
 // Markdown. None uses a language model: they differ only in which verbatim units they keep.
 
 import { conceptsOf, greedyCoverage, type CoverItem } from '../../src/handoff/coverage';
-import { runHandoff, V11_LAYOUT, type Layout } from '../../src/handoff/engine';
+import { runHandoff, V11_LAYOUT, V12_LAYOUT, type Layout } from '../../src/handoff/engine';
 import { estimateTokens } from '../../src/shared/util';
 import { centroid, cliff, facility, hybrid, hybridRepair, klsum, lsa, submodular, sumbasic, surprisal, withRepair } from './classic';
 import { embFacility, embHybrid, embMMR, external, semDedupeCoverage } from './embedding';
@@ -209,6 +209,9 @@ export const lucianV11 = engine('relevance', V11_LAYOUT);
 /** v1.1 layout with coverage selection only. */
 export const lucianV11Coverage = engine('coverage', V11_LAYOUT);
 
+/** v1.2: coverage-selected context, but a quarter of the budget for the transcript and no caps on decisions. */
+export const lucianV12 = engine('coverage', V12_LAYOUT);
+
 // ---------- token-level compaction (applied on top of a selection) ----------
 
 const FILLER =
@@ -251,6 +254,7 @@ export const ALGORITHMS: Record<string, Algorithm> = {
   coverage,
   skeletonCoverage,
   lucian,
+  'lucian/v1.2': lucianV12,
   'lucian/v1.1': lucianV11,
   'lucian/v1.1+coverage': lucianV11Coverage,
   // the default engine without referential repair (layout.repair = false)

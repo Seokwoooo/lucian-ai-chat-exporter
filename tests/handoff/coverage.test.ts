@@ -34,6 +34,18 @@ describe('budgeted maximum coverage', () => {
     expect(greedyCoverage(items, w, 10)).toEqual([1]);
     expect(greedyCoverage([item(0, 'x y', 10, 3), item(1, 'z w', 10, 1)], () => 1, 10)).toEqual([0]);
   });
+
+  it('re-reads costs that drop once a shared part is chosen (excerpt + the sentence before it)', () => {
+    // Item 1 is "antecedent + excerpt": 10 + 10 tokens until item 0 (the antecedent) is chosen.
+    const chosenParts = new Set<number>();
+    const parts: Record<number, number[]> = { 0: [0], 1: [0, 1], 2: [2] };
+    const items = [item(0, 'queue retry job', 10, 2), item(1, 'queue retry job idempotency header key', 20), item(2, 'misc note', 10)];
+    const cost = (it: CoverItem) => parts[it.id].filter((p) => !chosenParts.has(p)).length * 10;
+    const onChoose = (it: CoverItem) => parts[it.id].forEach((p) => chosenParts.add(p));
+    // With fixed costs the chain still costs 20 after its antecedent is in, and does not fit.
+    expect(greedyCoverage(items, () => 1, 20)).toEqual([0, 2]);
+    expect(greedyCoverage(items, () => 1, 20, new Set(), { cost, onChoose })).toEqual([0, 1]);
+  });
 });
 
 describe('handoff illustration', () => {

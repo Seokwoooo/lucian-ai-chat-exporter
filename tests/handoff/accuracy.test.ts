@@ -96,7 +96,10 @@ describe('handoff accuracy — Korean scenario (Electron → Tauri)', () => {
   it('starts with instructions for the next AI and references source messages', () => {
     expect(md.slice(0, 600)).toMatch(/이 문서를 읽는 AI에게/);
     expect(md).toMatch(/\[#m\d+\]/);
-    expect(md).toMatch(/## 부록\. 메시지 참조 색인/);
+    // The reference index costs budget without answering anything (QA evaluation, 2026-10), so it
+    // is off by default; the layout can still turn it on.
+    expect(md).not.toMatch(/## 부록/);
+    expect(runHandoff(conv, { now: 0, layout: { refIndex: true } }).markdown).toMatch(/## 부록\. 메시지 참조 색인/);
   });
 
   it('keeps an early important decision even though it is old', () => {
@@ -285,6 +288,61 @@ describe('handoff — referential repair (2026-10)', () => {
     });
     expect(kept).toBeGreaterThan(30);
     expect(dangling / kept).toBeLessThan(0.1);
+  });
+});
+
+describe('handoff — decisions, rejections and budget (QA evaluation, 2026-10)', () => {
+  // A long project chat in the shape of the QA evaluation: one real decision change, a rejected
+  // proposal, a stream of small edit requests ("… 바꿔 주세요") and a shell command shown twice.
+  const filler = (k: number) =>
+    `모듈${k} 쪽 로그를 확인했습니다. 설정 파일의 타임아웃 값은 ${k % 50}초이고 요청 ${k * 3}건 중 대부분이 정상 처리됐습니다. 캐시 적중률은 ${k % 90}%이고 handler${k}()는 그대로 둡니다.`;
+  const m = [
+    msg('user', '꽃집 주문·결제 시스템을 만들려고 해요.'),
+    msg('assistant', '좋습니다. 데이터 모델부터 잡겠습니다.'),
+    msg('user', 'DB는 일단 MongoDB로 하자.'),
+    msg('assistant', 'MongoDB 기준으로 스키마를 잡겠습니다.'),
+  ];
+  for (let k = 0; k < 400; k++) {
+    m.push(msg('user', k % 3 === 0 ? `화면${k}의 표 머리글 좀 바꿔 주세요.` : `모듈${k} 로그 좀 보여 줄래요?`));
+    m.push(msg('assistant', filler(k)));
+    if (k === 120) {
+      m.push(msg('user', '조회가 느린데 방법이 있을까요?'), msg('assistant', '조회 속도를 높이려면 Redis 캐시를 도입하는 것도 방법입니다.'));
+      m.push(msg('user', '아니요, Redis 캐시는 쓰지 않기로 해요. 운영할 사람이 없어요.'), msg('assistant', '알겠습니다. 쿼리를 다듬겠습니다.'));
+    }
+    if (k === 200) m.push(msg('user', 'MongoDB 말고 PostgreSQL로 가죠.'), msg('assistant', 'PostgreSQL로 전환하겠습니다.'));
+    if (k === 300) m.push(msg('user', '마이그레이션은 어떻게 돌려요?'), msg('assistant', '아래 명령으로 실행합니다.\n\n```bash\nnpm run db:migrate -- --env staging\n```'));
+  }
+  const c = makeConv(m, '결제');
+  const r = runHandoff(c, { now: 0 });
+  const md = r.markdown;
+  const decisions = section(md, DEC);
+
+  it('is long enough to be compressed', () => {
+    expect(r.stats.mode).toBe('compressed');
+  });
+
+  it('does not turn edit requests into decisions, but keeps a real change of choice', () => {
+    expect(decisions).not.toMatch(/표 머리글/);
+    expect(decisions.split('### ')[0]).toMatch(/PostgreSQL로 가죠/);
+    expect(subsection(decisions, '변경되거나')).toMatch(/MongoDB로 하자/);
+  });
+
+  it('keeps a rejected proposal as a prohibition', () => {
+    expect(section(md, CONS)).toMatch(/Redis 캐시는 쓰지 않기로 해요/);
+  });
+
+  it('shows a shell command once, in the command list', () => {
+    expect(md.match(/npm run db:migrate -- --env staging/g)).toHaveLength(1);
+  });
+
+  it('stays within the budget and shrinks with it', () => {
+    let prev = Infinity;
+    for (const budget of [16_000, 8_000, 4_000]) {
+      const t = estimateTokens(runHandoff(c, { now: 0, budgetTokens: budget }).markdown);
+      expect(t, `budget ${budget}`).toBeLessThanOrEqual(budget * 1.02);
+      expect(t).toBeLessThan(prev);
+      prev = t;
+    }
   });
 });
 

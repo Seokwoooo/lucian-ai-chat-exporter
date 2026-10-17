@@ -67,11 +67,23 @@ class MaxHeap {
   }
 }
 
+export interface CoverHooks {
+  /**
+   * Current cost of an item, when it can drop as other items are chosen (an excerpt chained with
+   * the sentence before it costs less once that sentence is in the document).
+   */
+  cost?: (it: CoverItem) => number;
+  /** Called for each chosen item, in selection order. */
+  onChoose?: (it: CoverItem) => void;
+}
+
 /**
  * Lazy greedy budgeted coverage. Returns the chosen item ids in selection order. A unit's gain
- * can only shrink as more concepts are covered, so a stale heap value is an upper bound.
+ * can only shrink as more concepts are covered, so a stale heap value is an upper bound (with
+ * dynamic costs it is an estimate: the gain is recomputed with the current cost on every pop).
  */
-export function greedyCoverage(items: CoverItem[], weight: (concept: string) => number, budget: number, covered: Set<string> = new Set()): number[] {
+export function greedyCoverage(items: CoverItem[], weight: (concept: string) => number, budget: number, covered: Set<string> = new Set(), hooks: CoverHooks = {}): number[] {
+  const costOf = (it: CoverItem) => (hooks.cost ? hooks.cost(it) : it.cost);
   const w = new Map<string, number>();
   const wOf = (c: string) => {
     let x = w.get(c);
@@ -84,7 +96,7 @@ export function greedyCoverage(items: CoverItem[], weight: (concept: string) => 
   const gain = (it: CoverItem) => {
     let g = 0;
     for (const c of it.concepts) if (!covered.has(c)) g += wOf(c);
-    return (g * it.prior) / Math.pow(Math.max(1, it.cost), 0.9);
+    return (g * it.prior) / Math.pow(Math.max(1, costOf(it)), 0.9);
   };
   const heap = new MaxHeap();
   items.forEach((it, k) => heap.push(gain(it), k));
@@ -93,7 +105,8 @@ export function greedyCoverage(items: CoverItem[], weight: (concept: string) => 
   while (heap.size && remaining > 0) {
     const [, k] = heap.pop();
     const it = items[k];
-    if (it.cost > remaining) continue;
+    const cost = costOf(it);
+    if (cost > remaining) continue;
     const fresh = gain(it);
     if (fresh <= 0) continue;
     if (heap.size && fresh < heap.peekGain()) {
@@ -101,8 +114,9 @@ export function greedyCoverage(items: CoverItem[], weight: (concept: string) => 
       continue;
     }
     chosen.push(it.id);
-    remaining -= it.cost;
+    remaining -= cost;
     for (const c of it.concepts) covered.add(c);
+    hooks.onChoose?.(it);
   }
   return chosen;
 }
