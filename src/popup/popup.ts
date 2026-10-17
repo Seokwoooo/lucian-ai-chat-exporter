@@ -206,6 +206,17 @@ function progressText(job: JobState): string {
   return '';
 }
 
+/**
+ * Swaps the status icon only when its kind changes. Re-creating the spinner on every progress
+ * update restarted its rotation, so it stuttered (6 restarts in a 2-second 1M handoff).
+ */
+function setIcon(icon: HTMLElement, kind: keyof typeof ICONS): void {
+  if (icon.dataset.kind === kind) return;
+  icon.dataset.kind = kind;
+  icon.classList.toggle('spin', kind === 'spin');
+  icon.innerHTML = ICONS[kind];
+}
+
 function render(job: JobState | null): void {
   current = job;
   const box = $('status');
@@ -225,7 +236,6 @@ function render(job: JobState | null): void {
   const open = $('openBtn');
   const retry = $('retryBtn');
   const checks = $<HTMLUListElement>('checks');
-  icon.className = 'status-icon';
   sub.textContent = '';
   timings.innerHTML = '';
   details.hidden = true;
@@ -237,8 +247,7 @@ function render(job: JobState | null): void {
 
   const running = !['done', 'error', 'print'].includes(job.phase);
   if (running) {
-    icon.classList.add('spin');
-    icon.innerHTML = ICONS.spin;
+    setIcon(icon, 'spin');
     const key: MessageKey =
       job.phase === 'collecting' || job.phase === 'queued'
         ? 'phase.collecting'
@@ -262,7 +271,7 @@ function render(job: JobState | null): void {
     }
   } else if (job.phase === 'error') {
     box.dataset.level = 'error';
-    icon.innerHTML = ICONS.err;
+    setIcon(icon, 'err');
     text.textContent = t(locale, 'phase.error');
     sub.textContent = errorText(job.error?.code ?? 'UNKNOWN');
     retry.hidden = job.error?.code === 'NOT_SUPPORTED' || job.error?.code === 'NOT_CONVERSATION';
@@ -271,7 +280,7 @@ function render(job: JobState | null): void {
     const v = job.result?.verification;
     const level = v?.level ?? 'ok';
     box.dataset.level = job.phase === 'print' && !v ? '' : level;
-    icon.innerHTML = job.phase === 'print' ? ICONS.print : level === 'ok' ? ICONS.ok : level === 'warning' ? ICONS.warn : ICONS.err;
+    setIcon(icon, job.phase === 'print' ? 'print' : level === 'ok' ? 'ok' : level === 'warning' ? 'warn' : 'err');
     if (job.phase === 'print') {
       text.textContent = t(locale, 'phase.print');
     } else if (job.format === 'pdf') {

@@ -58,6 +58,8 @@ popup            src/popup/*                two cards: handoff button, export fo
   the streaming `scanXmlWellFormed` instead of `DOMParser`.
 - Progress: builders and the handoff engine report fractions; offscreen turns them into whole
   percents (`offscreen-progress`), shown as "처리 중… (n% 완료)" in the popup and the page panel.
+  Updates change only the text and the bar: the spinner element is created once per job (a new
+  element restarts its rotation — the E2E 1M test counts this).
 - `src/shared/handoff-visual.ts` draws the "this AI → other AI" illustration above the handoff
   button (popup + page panel). Logos live in `src/static/providers/` (web-accessible on the five
   AI origins only); they are trademarks used only to name the services.
@@ -76,6 +78,8 @@ popup            src/popup/*                two cards: handoff button, export fo
   and bump `CACHE_VERSION` (src/handoff/cache-codec.ts) whenever `classify()` changes.
 - Handoff noise rules: no uncited search results, no tracking params, a sentence appears in one
   section only, tables/headings never become bullets, every section stays within its budget share.
+  A revised draft is shown once (earlier copies become a `_(… N줄 생략 …)_` note, `collapseRepeats`),
+  and when the whole conversation is included the sections only index it (`fullIndex`).
 - User-facing strings go through `src/shared/i18n.ts` (Korean default, English supported).
 - Fixtures must be synthetic — never commit real conversations, cookies or tokens.
 - Site structures change: when a real-site check finds a new shape (e.g. ChatGPT `channel:

@@ -47,13 +47,16 @@ const TEMPLATE_BITS = [
   /\(이어지는 내용은 아래 대화 원문[^)]*\)|\(continued in the transcript below[^)]*\)/g,
   /\(사용자가 \[#m\d+\]에서 승인\)|\(approved by the user[^)]*\)/gi,
   /→ \[#m\d+\]에서 변경됨[^\n]*|→ changed in[^\n]*/g,
-  /→ (?:답변 요지|Answer gist):/g,
+  /→ (?:답변 요지|answer in short):/gi,
   /\(비슷한 요청 \d+회\)|\(\d+ similar requests?\)/g,
   /최근 대화 원문에 있는 코드는 그곳에만 둡니다[^\n]*|Code that is in the recent transcript[^\n]*/g,
   /\(길어서 가운데 일부 생략\)|\(middle omitted[^)]*\)/g,
+  /_\(… \d+줄 생략 — 같거나 거의 같은 내용이 아래[^)]*\)_|_\(… \d+ lines omitted — the same or nearly the same text[^)]*\)_/g,
+  /마지막 AI 응답 \[#m\d+\]: 아래 대화 원문에 전체가 있습니다\.|The last AI reply \[#m\d+\] is in the transcript below in full\./g,
   /⚠️[^\n]*/g,
   /\s×\d+\b/g,
 ];
+const REPEAT_NOTE_RE = /^_\(… \d+(?:줄 생략|\s+lines omitted) — [^\n]*\)_$/;
 const LABEL_RE = /^\s*\*\*[^*]+\*\*\s*(?:\[#m\d+\])?\s*$/;
 const FOOTER_RE = /Lucian AI Chat Exporter · /;
 const TRANSCRIPT_RE = /원문$|verbatim|Recent conversation|Full conversation/i;
@@ -173,6 +176,8 @@ const agg = {
   excerpts: { total: 0, cited: 0, elsewhere: 0, missing: 0 },
   links: { total: 0, ok: 0 },
   transcriptLines: { total: 0, ok: 0 },
+  /** Runs of lines shown once because a later message repeats them (revised drafts). */
+  repeatNotes: 0,
 };
 const report: string[] = [];
 
@@ -230,6 +235,10 @@ for (const { name, conv, md } of pairs) {
         }
         if (/^\s*(```|~~~)/.test(line)) {
           inCode = !inCode;
+          continue;
+        }
+        if (REPEAT_NOTE_RE.test(line.trim())) {
+          agg.repeatNotes++;
           continue;
         }
         let f = norm(line.replace(/\[(?:이미지|image)(?::[^\]]*)?\]/g, ' '));

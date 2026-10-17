@@ -71,6 +71,14 @@ export interface Layout {
   clippedExcerpts: boolean;
   /** Excerpts that open with a reference ("이 방식은…") get the sentence before them. */
   repair: boolean;
+  /** Lines a later transcript message repeats (revised drafts) are shown once (v1.3.4). */
+  collapseRepeats: boolean;
+  /**
+   * When the whole conversation is in the document, the sections above it are a short index of it
+   * (requests without answer summaries, short quotes, a pointer to the last answer) rather than a
+   * second copy (v1.3.4).
+   */
+  fullIndex: boolean;
   /** Appendix table of referenced messages (role, time, first line). */
   refIndex: boolean;
   /** How much rule-based relevance raises a unit's coverage gain (0 = concepts only, 1 = up to ×2 over the least relevant). */
@@ -100,6 +108,8 @@ export const DEFAULT_LAYOUT: Layout = {
   ruleShare: 0.2,
   clippedExcerpts: true,
   repair: true,
+  collapseRepeats: true,
+  fullIndex: true,
   refIndex: false,
   relPrior: 0.5,
   filesPer: 200,
@@ -119,6 +129,8 @@ export const V12_LAYOUT: Layout = {
   ruleShare: Infinity,
   clippedExcerpts: true,
   repair: true,
+  collapseRepeats: false,
+  fullIndex: false,
   refIndex: true,
   relPrior: 0.5,
   filesPer: 200,
@@ -440,6 +452,8 @@ export function transcriptBody(msg: Conversation['messages'][number], lang: 'ko'
 }
 
 const REQUEST_CHARS = 240;
+/** Request lines when the full transcript follows (index mode). */
+const INDEX_REQUEST_CHARS = 120;
 const LEAD_CHARS = 220;
 
 function clipLine(text: string, max: number): { text: string; clipped: boolean } {
@@ -478,6 +492,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
 
   const fullMode = ctx.budgetTokens != null ? ctx.sourceTokens <= ctx.budgetTokens : ctx.sourceTokens <= FULL_MODE_TOKENS;
   const capBudget = ctx.budgetTokens ?? (fullMode ? MAX_BUDGET : handoffBudget(ctx.sourceTokens));
+  // The whole conversation follows verbatim: the sections only point into it.
+  const indexMode = fullMode && ctx.layout.fullIndex;
   const cap = (per: number, min: number, max: number) => Math.round(Math.min(max, Math.max(min, capBudget / per)));
   const MAX_DONE = cap(600, 10, 40);
   const MAX_OPEN = cap(500, 12, 50);
@@ -580,11 +596,12 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   }
   const msgScore = (m: number) => Math.max(0, ...unitsOf(m).map((i) => score[i]));
   let reqs0 = keptReq.map((m) => {
-    const { text, clipped } = clipLine(bulletText(messageText(conv.messages[m])), REQUEST_CHARS);
+    const { text, clipped } = clipLine(bulletText(messageText(conv.messages[m])), indexMode ? INDEX_REQUEST_CHARS : REQUEST_CHARS);
     // The lead sentence of the answer gives the next AI the outcome of each turn in one line.
+    // (Not in index mode: the whole answer follows in the transcript.)
     let leadIdx = -1;
     const reply = m + 1 < N && conv.messages[m + 1].role === 'assistant' ? m + 1 : -1;
-    if (reply >= 0 && reply < recentFrom) {
+    if (reply >= 0 && reply < recentFrom && !indexMode) {
       const cand = unitsOf(reply).filter((i) => isLine(units[i]) && !(flags[i] & F.POLITE) && units[i].text.length >= 15);
       leadIdx = cand.slice(0, 8).find((i) => flags[i] & F.LEAD) ?? cand[0] ?? -1;
     }
@@ -910,7 +927,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
 
   // ---------- current state: key sentences of the last answer not shown elsewhere ----------
   const lastAssistantKey: Item[] = [];
-  if (lastAssistant >= 0) {
+  // In index mode the last answer is in the transcript in full; the section points to it.
+  if (lastAssistant >= 0 && !indexMode) {
     const idx = unitsOf(lastAssistant).filter((i) => isLine(units[i]) && !(flags[i] & F.POLITE) && !isUsed(i) && !isLabel(i));
     const weight = (i: number) => score[i] + (flags[i] & F.LEAD ? 2 : 0) + (/\*\*[^*]+\*\*/.test(units[i].text) ? 0.6 : 0);
     // The last answer is in the transcript below; unless it is clipped there, two key sentences
@@ -1023,6 +1041,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       }
     }
   }
+  // A revised draft repeats most of the earlier one: show each line once, in its latest form.
+  if (ctx.layout.collapseRepeats) collapseRepeats(recent, ctx.lang);
 
 
   // Code: latest version of each code cluster, highest scoring first, within ~30% of budget.
@@ -1185,6 +1205,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   return {
     lang: ctx.lang,
     mode: full ? 'full' : 'compressed',
+    index: indexMode,
     refIndex: ctx.layout.refIndex,
     conv,
     now: ctx.now,
@@ -1221,6 +1242,135 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
 function sameRule(a: string[], b: string[]): boolean {
   const distinctive = (t: string) => /[a-z0-9]/.test(t) && t.length >= 3;
   return a.some((t) => distinctive(t) && b.includes(t));
+}
+
+/** Normalized text of a transcript line for "same line" checks (markup and spacing ignored). */
+function lineKey(line: string): string {
+  return line
+    .replace(/^\s*(?:[-*+>]|\d+[.)]|#{1,6})\s+/, '')
+    .replace(/[*_`~|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+const REPEAT_MIN = 24;
+/** Above this many near-match comparisons only exact repeats are collapsed (very long transcripts). */
+const REPEAT_COMPARISONS = 2_000_000;
+
+/** The note that replaces a run of lines repeated in a later transcript message. */
+export function repeatNote(n: number, ms: number[], lang: 'ko' | 'en'): string {
+  const refs = [...new Set(ms)].sort((a, b) => a - b).map((m) => `[#m${m + 1}]`).join(', ');
+  return lang === 'ko'
+    ? `_(… ${n}줄 생략 — 같거나 거의 같은 내용이 아래 ${refs}에 있습니다)_`
+    : `_(… ${n} lines omitted — the same or nearly the same text is in ${refs} below)_`;
+}
+
+/**
+ * Lines a later transcript message repeats (a revised draft: "rewrite it" → the whole draft again
+ * with a few edits) are shown once, in the latest message. In the earlier message each run of
+ * such lines becomes one note pointing to the later one; lines that changed stay. Fenced code is
+ * compared as one block. A line counts as repeated when it is the same after normalization, or
+ * nearly the same (≥ 85% of its words shared with a later line of similar length). Short lines
+ * (headings, labels, "가격: 3만원") are never matched loosely: inside a run they are dropped only
+ * when a later message has the same line, otherwise they end the run and stay.
+ */
+export function collapseRepeats(recent: Array<{ m: number; role: string; body: string }>, lang: 'ko' | 'en'): void {
+  // A user's line only collapses into a later user message (their own revised paste), so what the
+  // user said is never shown only as the AI's words. An AI line may point to either.
+  interface Index {
+    exact: Map<string, number>;
+    short: Set<string>;
+    words: Array<{ words: Set<string>; len: number; m: number }>;
+  }
+  const all: Index = { exact: new Map(), short: new Set(), words: [] };
+  const users: Index = { exact: new Map(), short: new Set(), words: [] };
+  let comparisons = 0;
+  const wordsOf = (key: string) => new Set(key.split(' ').filter((w) => w.length > 1));
+  const match = (ix: Index, key: string): number | undefined => {
+    const exact = ix.exact.get(key);
+    if (exact != null) return exact;
+    const w = wordsOf(key);
+    if (w.size < 5 || comparisons > REPEAT_COMPARISONS) return undefined;
+    for (const c of ix.words) {
+      if (c.len < key.length * 0.75 || c.len > key.length * 1.33) continue;
+      comparisons++;
+      let inter = 0;
+      for (const x of w) if (c.words.has(x)) inter++;
+      if (inter / (w.size + c.words.size - inter) >= 0.85) return c.m;
+    }
+    return undefined;
+  };
+  for (let k = recent.length - 1; k >= 0; k--) {
+    const r = recent[k];
+    const ix = r.role === 'user' ? users : all;
+    // Blocks: single lines, or a whole fenced code block.
+    const blocks: string[] = [];
+    let fence: string[] | null = null;
+    for (const line of r.body.split('\n')) {
+      if (/^\s{0,3}(`{3,}|~{3,})/.test(line)) {
+        if (fence) {
+          fence.push(line);
+          blocks.push(fence.join('\n'));
+          fence = null;
+        } else fence = [line];
+      } else if (fence) fence.push(line);
+      else blocks.push(line);
+    }
+    if (fence) blocks.push(fence.join('\n'));
+    const out: string[] = [];
+    const own: string[] = [];
+    const short: string[] = [];
+    let run = 0;
+    let runM: number[] = [];
+    let pending: string[] = [];
+    let collapsed = false;
+    const flush = () => {
+      if (run) {
+        out.push(repeatNote(run, runM, lang));
+        collapsed = true;
+      }
+      run = 0;
+      runM = [];
+      out.push(...pending);
+      pending = [];
+    };
+    for (const b of blocks) {
+      const key = lineKey(b);
+      if (key.length < REPEAT_MIN) {
+        if (key) short.push(key);
+        // Blank lines and short lines a later message also has belong to a run around them.
+        if (!key || ix.short.has(key)) {
+          if (run) pending.push(b);
+          else out.push(b);
+          continue;
+        }
+        flush();
+        out.push(b);
+        continue;
+      }
+      const m = match(ix, key);
+      if (m != null) {
+        // One note per run, even when its lines are repeated in different later messages.
+        run += b.split('\n').length + pending.filter((x) => x.trim()).length;
+        pending = [];
+        runM.push(m);
+        continue;
+      }
+      flush();
+      out.push(b);
+      own.push(key);
+    }
+    flush();
+    if (collapsed) r.body = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    for (const target of r.role === 'user' ? [all, users] : [all]) {
+      for (const key of own) {
+        if (!target.exact.has(key)) target.exact.set(key, r.m);
+        target.words.push({ words: wordsOf(key), len: key.length, m: r.m });
+      }
+      for (const key of short) target.short.add(key);
+    }
+  }
 }
 
 /** Keeps the head and tail of a long Markdown body and keeps code fences balanced. */

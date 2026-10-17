@@ -61,6 +61,8 @@ export interface RecentMessage {
 export interface HandoffDoc {
   lang: 'ko' | 'en';
   mode: 'full' | 'compressed';
+  /** The sections are a short index of the full transcript that follows (no second copy). */
+  index?: boolean;
   /** Appendix table of referenced messages that are not in the transcript. */
   refIndex: boolean;
   conv: Conversation;
@@ -106,8 +108,6 @@ const L = {
       '4. `[#m12]`는 원본 대화의 12번째 메시지를 뜻합니다.',
       '5. 답변은 사용자가 쓰던 언어로 하세요. 이 문서를 읽은 직후에는 이해한 현재 상태를 짧게 정리하고, 이어서 할 작업을 제안하세요.',
     ],
-    introEn:
-      '*To the AI reading this:* this is an automatically generated, extractive handoff of an earlier chat. Treat the latest decisions and the constraints as authoritative, continue from “Next steps”, and confirm ⚠️ items with the user.',
     meta: '기본 정보',
     metaRows: { site: '원본 서비스', title: '대화 제목', url: '원본 링크', extracted: '추출 시각', messages: '메시지 수', size: '원문 분량', mode: '정리 방식' },
     modeFull: '대화가 짧아 전체 원문 포함',
@@ -131,6 +131,7 @@ const L = {
     fullBelow: '(전체는 아래 대화 원문 {ref})',
     moreBelow: '(이어지는 내용은 아래 대화 원문 {ref}, 길어서 가운데 일부 생략)',
     lastAssistant: '마지막 AI 응답의 핵심 문장',
+    lastBelow: '마지막 AI 응답 {ref}: 아래 대화 원문에 전체가 있습니다.',
     noReply: '마지막 요청에 대한 AI 응답이 아직 없습니다. 이 요청부터 처리하세요.',
     emptyReply: '마지막 AI 응답 {ref}에는 보이는 내용이 없습니다(추출할 때 아직 생성 중이었거나 생각 과정만 있음). 마지막 사용자 요청부터 처리하세요.',
     emptyBody: '_(보이는 내용 없음)_',
@@ -175,7 +176,6 @@ const L = {
       '4. `[#m12]` refers to the 12th message of the original conversation.',
       '5. Reply in the user’s language. Right after reading this, briefly summarize the current state as you understand it and propose the next step.',
     ],
-    introEn: '',
     meta: 'Source',
     metaRows: { site: 'Service', title: 'Title', url: 'URL', extracted: 'Extracted', messages: 'Messages', size: 'Source size', mode: 'Mode' },
     modeFull: 'short conversation — full transcript included',
@@ -199,6 +199,7 @@ const L = {
     fullBelow: '(full text in the transcript below, {ref})',
     moreBelow: '(continued in the transcript below, {ref}; its middle is omitted)',
     lastAssistant: 'Key sentences of the last AI reply',
+    lastBelow: 'The last AI reply {ref} is in the transcript below in full.',
     noReply: 'The last request has no AI reply yet. Start by handling it.',
     emptyReply: 'The last AI reply {ref} has no visible content (it was still being written, or holds only thinking). Start from the last user request.',
     emptyBody: '_(no visible content)_',
@@ -282,7 +283,6 @@ export function renderHandoff(doc: HandoffDoc): string {
   out.push(`# ${S.title} — ${conv.title || conv.siteName}`);
   out.push('');
   out.push(S.intro.map((p, i) => `> ${fill(p, { site: conv.siteName })}${i === 0 ? '\n>' : ''}`).join('\n'));
-  if (S.introEn) out.push(`>\n> ${S.introEn}`);
   out.push('');
 
   section(S.meta);
@@ -350,7 +350,7 @@ export function renderHandoff(doc: HandoffDoc): string {
 
   if (doc.done.length) {
     section(S.done);
-    out.push(list(doc.done, 220));
+    out.push(list(doc.done, doc.index ? 120 : 220));
     out.push('');
   }
 
@@ -365,7 +365,7 @@ export function renderHandoff(doc: HandoffDoc): string {
     // When the request is in the verbatim transcript below, a short quote is enough here. A clipped
     // transcript keeps the request's opening, so a long quote here would only repeat it.
     const below = doc.recent.find((r) => r.m === doc.lastUser);
-    const max = below ? 400 : 3000;
+    const max = below ? (doc.index ? 160 : 400) : 3000;
     const clipped = clipText(text, max);
     out.push(`**${S.lastUser}** ${ref(doc.lastUser)}`);
     out.push('');
@@ -381,6 +381,9 @@ export function renderHandoff(doc: HandoffDoc): string {
   } else if (doc.lastAssistant > doc.lastUser && doc.lastAssistantEmpty) {
     out.push(fill(S.emptyReply, { ref: ref(doc.lastAssistant) }));
     out.push('');
+  } else if (doc.lastAssistant > doc.lastUser && doc.index) {
+    out.push(fill(S.lastBelow, { ref: ref(doc.lastAssistant) }));
+    out.push('');
   } else if (doc.lastUser >= 0 && doc.lastAssistant < doc.lastUser) {
     out.push(S.noReply);
     out.push('');
@@ -388,7 +391,7 @@ export function renderHandoff(doc: HandoffDoc): string {
 
   if (doc.open.length) {
     section(S.open);
-    out.push(list(doc.open, 220));
+    out.push(list(doc.open, doc.index ? 120 : 220));
     out.push('');
   }
 

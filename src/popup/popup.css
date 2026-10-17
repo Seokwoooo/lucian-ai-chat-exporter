@@ -142,7 +142,9 @@ body[data-ready] .more svg { transition: transform .2s ease; }
 .status-head { display: flex; align-items: flex-start; gap: 8px; font-weight: 600; }
 .status-icon { width: 16px; height: 16px; flex: none; margin-top: 1px; }
 .status-icon svg { width: 16px; height: 16px; display: block; }
-.status-icon.spin svg { animation: spin 0.9s linear infinite; }
+/* The wrapper turns, not the SVG: a transform animation on an HTML element runs on the compositor,
+   so it keeps turning while the page is busy. */
+.status-icon.spin { animation: spin 0.9s linear infinite; will-change: transform; }
 .status[data-level="ok"] .status-icon { color: var(--ok); }
 .status[data-level="warning"] .status-icon { color: var(--warn); }
 .status[data-level="error"] .status-icon { color: var(--err); }
@@ -171,7 +173,7 @@ body[data-ready] .more svg { transition: transform .2s ease; }
 @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
-  .status-icon.spin svg, .progress[data-indeterminate="true"] .progress-bar { animation: none; }
+  .status-icon.spin, .progress[data-indeterminate="true"] .progress-bar { animation: none; }
 }
 
 .handoff-visual { min-height: 58px; }

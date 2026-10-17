@@ -50,10 +50,11 @@ button:active { transform: scale(.96); }
 button[data-busy="true"] .ring::before { animation-duration: 1.6s; }
 button:focus-visible { outline: 2px solid #7c5cff; outline-offset: 1px; }
 svg { width: 18px; height: 18px; filter: drop-shadow(0 0 2.5px rgba(124, 92, 255, .55)); }
-.spin { animation: spin .9s linear infinite; }
+/* The icon wrapper turns (compositor animation), so the spinner keeps turning while the page is busy. */
+.icon.spinning { animation: spin .9s linear infinite; will-change: transform; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes breathe { 0%, 100% { opacity: .38; transform: scale(.94); } 50% { opacity: .72; transform: scale(1.04); } }
-@media (prefers-reduced-motion: reduce) { .halo, .ring::before, .spin { animation: none; } button { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .halo, .ring::before, .icon.spinning { animation: none; } button { transition: none; } }
 `;
 
 const PANEL_CSS = `
@@ -114,8 +115,9 @@ button:disabled { opacity: .45; cursor: default; }
 .status .bar { margin-top: 7px; height: 4px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; }
 .status .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7c5cff, #22d3ee); transition: width .25s ease; }
 .link { all: unset; color: var(--text); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-.spin { animation: r 0.9s linear infinite; }
+.status .ic.spinning { animation: r 0.9s linear infinite; will-change: transform; }
 @keyframes r { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .status .ic.spinning { animation: none; } }
 .toast {
   position: fixed; z-index: 2147483646; right: 16px; bottom: 16px; max-width: 320px; padding: 10px 12px;
   display: flex; gap: 8px; align-items: center; border-radius: 12px; background: var(--bg); color: var(--text);
@@ -216,9 +218,11 @@ export function initPageUi(adapter: SiteAdapter): void {
     box.hidden = false;
     const fmtName = job.format ? tr(`format.${job.format}` as MessageKey) : 'Markdown';
     let icon = ICON.spin;
+    let iconKind = 'spin';
     let title: string;
     let sub = '';
     let extra = '';
+    let pct: number | null = null;
     box.dataset.level = '';
     if (!TERMINAL.includes(job.phase)) {
       const key: MessageKey =
@@ -236,10 +240,14 @@ export function initPageUi(adapter: SiteAdapter): void {
       if (p?.label === 'messages' && p.done) sub = tr('progress.messages', { done: p.done.toLocaleString() });
       else if (p?.label === 'assets' && p.total) sub = `${tr('progress.assets', { done: p.done ?? 0, total: p.total })} ${tr('progress.percent', { n: Math.floor(((p.done ?? 0) / p.total) * 100) })}`;
       else if (p?.label === 'percent' && p.total) sub = tr('progress.percent', { n: p.done ?? 0 });
-      if (p?.total && p.done != null) extra += `<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round((p.done / p.total) * 100)}"><i style="width:${Math.max(3, Math.round((p.done / p.total) * 100))}%"></i></div>`;
+      if (p?.total && p.done != null) {
+        pct = Math.round((p.done / p.total) * 100);
+        extra += '<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><i></i></div>';
+      }
     } else if (job.phase === 'error') {
       box.dataset.level = 'error';
       icon = ICON.err;
+      iconKind = 'err';
       title = tr('phase.error');
       const k = `error.${job.error?.code ?? 'UNKNOWN'}` as MessageKey;
       sub = tr(k) === k ? tr('error.UNKNOWN') : tr(k);
@@ -248,6 +256,7 @@ export function initPageUi(adapter: SiteAdapter): void {
       const level = v?.level ?? 'ok';
       box.dataset.level = job.phase === 'print' && !v ? '' : level;
       icon = job.phase === 'print' && !v ? ICON.spin.replace('class="spin"', '') : level === 'ok' ? ICON.ok : level === 'warning' ? ICON.warn : ICON.err;
+      iconKind = job.phase === 'print' && !v ? 'print' : level;
       if (job.phase === 'print') title = tr('phase.print');
       else if (job.format === 'pdf') title = tr('phase.done.print');
       else title = tr(job.kind === 'handoff' ? 'phase.done.handoff' : 'phase.done.export', { format: fmtName });
@@ -264,7 +273,30 @@ export function initPageUi(adapter: SiteAdapter): void {
     if (job.phase === 'error' && job.error?.code !== 'NOT_SUPPORTED' && job.error?.code !== 'NOT_CONVERSATION') {
       extra += `<div class="actions"><button type="button" class="link" data-act="retry">${escapeText(tr('result.retry'))}</button></div>`;
     }
-    box.innerHTML = `<span class="ic">${icon}</span><div class="body"><div class="title">${escapeText(title)}</div>${sub ? `<div class="sub">${escapeText(sub)}</div>` : ''}${extra}</div>`;
+    // Polls arrive every ~0.45 s: keep the icon element (re-creating the spinner restarted its
+    // rotation, so it stuttered) and move the progress bar in place so its width transition runs.
+    let ic = box.querySelector<HTMLElement>(':scope > .ic');
+    let body = box.querySelector<HTMLElement>(':scope > .body');
+    if (!ic || !body) {
+      box.innerHTML = '<span class="ic"></span><div class="body"></div>';
+      ic = box.querySelector<HTMLElement>(':scope > .ic')!;
+      body = box.querySelector<HTMLElement>(':scope > .body')!;
+    }
+    if (ic.dataset.kind !== iconKind) {
+      ic.dataset.kind = iconKind;
+      ic.classList.toggle('spinning', iconKind === 'spin');
+      ic.innerHTML = icon;
+    }
+    const html = `<div class="title">${escapeText(title)}</div>${sub ? `<div class="sub">${escapeText(sub)}</div>` : ''}${extra}`;
+    if (body.dataset.html !== html) {
+      body.dataset.html = html;
+      body.innerHTML = html;
+    }
+    const bar = body.querySelector<HTMLElement>('.bar');
+    if (bar && pct != null) {
+      bar.setAttribute('aria-valuenow', String(pct));
+      (bar.firstElementChild as HTMLElement).style.width = `${Math.max(3, pct)}%`;
+    }
   };
 
   const position = () => {
@@ -323,10 +355,15 @@ export function initPageUi(adapter: SiteAdapter): void {
 
   // ---------- jobs ----------
 
+  // Only on a change: re-inserting the spinner on every poll restarted its rotation.
   const setBusy = (busy: boolean) => {
     for (const b of triggers) {
+      if (b.dataset.busy === String(busy)) continue;
       const icon = b.querySelector('.icon');
-      if (icon) icon.innerHTML = busy ? ICON.spin : LOGO;
+      if (icon) {
+        icon.innerHTML = busy ? ICON.spin : LOGO;
+        icon.classList.toggle('spinning', busy);
+      }
       b.dataset.busy = String(busy);
     }
   };
@@ -446,7 +483,9 @@ export function initPageUi(adapter: SiteAdapter): void {
     style.textContent = BUTTON_CSS;
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.innerHTML = `<span class="halo"></span><span class="ring"></span><span class="icon" style="display:inline-flex">${job && !TERMINAL.includes(job.phase) ? ICON.spin : LOGO}</span>`;
+    const busy = !!job && !TERMINAL.includes(job.phase);
+    btn.innerHTML = `<span class="halo"></span><span class="ring"></span><span class="icon${busy ? ' spinning' : ''}" style="display:inline-flex">${busy ? ICON.spin : LOGO}</span>`;
+    btn.dataset.busy = String(busy);
     btn.title = tr('page.button');
     btn.setAttribute('aria-label', tr('page.button'));
     btn.setAttribute('aria-haspopup', 'dialog');

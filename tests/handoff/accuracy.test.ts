@@ -220,7 +220,11 @@ describe('handoff noise control — web-search research chat (user report, 2026-
     expect(goal).toMatch(/라이선스 조건 찾아서 제대로 정리해줘 \[#m5\]/);
     expect(section(md, '미완료 작업')).toMatch(/실제 약관 원문은 확보하지 못했습니다/);
     expect(section(md, '다음에 이어서 할 작업')).toMatch(/남은 핵심은 저작권 표시 조건의 실제 원문 확인입니다/);
-    expect(section(md, '현재 진행 상황')).toMatch(/먼저 결론부터 말씀드리면/);
+    // The whole conversation follows, so "current state" points to the last answer instead of
+    // copying its sentences (v1.3.4); the answer itself is in the transcript.
+    expect(section(md, '현재 진행 상황')).toMatch(/마지막 AI 응답 \[#m6\]: 아래 대화 원문에 전체가 있습니다/);
+    expect(section(md, '현재 진행 상황')).not.toMatch(/먼저 결론부터 말씀드리면/);
+    expect(transcript).toMatch(/먼저 결론부터 말씀드리면/);
     // Advice ("~확인해야 합니다") and descriptions of other projects are not the user's tasks.
     expect(section(md, '미완료 작업')).not.toMatch(/동기화 제한도 확인해야 합니다/);
     expect(section(md, '완료한 작업')).not.toMatch(/테마 12개를 자체 제작해 작성했습니다/);
@@ -417,5 +421,72 @@ describe('last answer with nothing visible yet (v1.3.3)', () => {
     expect(section(md, '현재 진행 상황')).toMatch(/마지막 AI 응답 \[#m4\]에는 보이는 내용이 없습니다/);
     expect(md).toContain('_(보이는 내용 없음)_');
     expect(md).not.toContain('_(empty)_');
+  });
+});
+
+describe('revised drafts and the full-transcript index (v1.3.4)', () => {
+  const body = [
+    '봄맞이 신제품 출시를 알리는 첫 문장입니다. 새로운 텀블러가 오늘부터 판매됩니다.',
+    '',
+    '보온 12시간, 보냉 24시간을 지키는 이중 진공 구조로 만들었습니다.',
+    '용량은 500ml이고 색상은 크림, 세이지, 차콜 세 가지입니다.',
+    '가격: 3만원',
+    '',
+    '#신제품 #텀블러 #봄맞이 이벤트는 이번 주 일요일까지 진행합니다.',
+  ];
+  const draft = (lines: string[]) => `X 게시물 초안입니다.\n\n${lines.join('\n')}`;
+  const v2 = body.map((l) => (l === '가격: 3만원' ? '가격: 2만 9천원' : l));
+  const v3 = v2.map((l) => (l.startsWith('용량은') ? '용량은 500ml와 750ml 두 가지이고, 색상은 크림과 차콜만 남겼습니다.' : l));
+  const c = makeConv([
+    msg('user', '신제품 텀블러 출시 X 게시물 초안 써줘'),
+    msg('assistant', draft(body)),
+    msg('user', '가격을 2만 9천원으로 바꿔서 다시 써줘'),
+    msg('assistant', draft(v2)),
+    msg('user', '용량 옵션 추가해서 다시'),
+    msg('assistant', draft(v3)),
+  ]);
+  const r = runHandoff(c, { now: 0 });
+  const md = r.markdown;
+  const transcript = md.slice(md.search(/\n## \d+\. 전체 대화 원문/));
+  const count = (s: string, sub: string) => s.split(sub).length - 1;
+
+  it('shows each repeated draft line once, in the latest draft', () => {
+    expect(r.stats.mode).toBe('full');
+    expect(count(transcript, '이중 진공 구조로 만들었습니다')).toBe(1);
+    expect(count(transcript, '이벤트는 이번 주 일요일까지')).toBe(1);
+    expect(transcript).toMatch(/_\(… \d+줄 생략 — 같거나 거의 같은 내용이 아래 \[#m6\]에 있습니다\)_/);
+    // The latest draft is complete.
+    const last = transcript.slice(transcript.lastIndexOf('[#m6]'));
+    for (const l of v3.filter((x) => x.trim())) expect(last).toContain(l);
+  });
+
+  it('keeps the lines that changed between drafts', () => {
+    expect(transcript).toContain('가격: 3만원');
+    expect(transcript).toContain('용량은 500ml이고 색상은 크림, 세이지, 차콜 세 가지입니다.');
+  });
+
+  it('never collapses what the user wrote into an AI reply', () => {
+    const paste = '이번 시즌 메시지는 "가볍게 들고 다니는 하루"로 정했고, 이 문장은 꼭 그대로 써 주세요.';
+    const md2 = runHandoff(makeConv([msg('user', `${paste}\n이 문장으로 초안 써줘`), msg('assistant', `${paste}\n\n초안을 썼습니다.`)]), { now: 0 }).markdown;
+    const t2 = md2.slice(md2.search(/\n## \d+\. 전체 대화 원문/));
+    expect(count(t2, paste)).toBe(2);
+    expect(t2).not.toContain('줄 생략 — 같거나');
+  });
+
+  it('keeps the transcript unchanged with the v1.2 layout', () => {
+    const old = runHandoff(c, { now: 0, layout: { collapseRepeats: false, fullIndex: false } }).markdown;
+    expect(count(old, '이중 진공 구조로 만들었습니다')).toBeGreaterThanOrEqual(3);
+    expect(estimateTokens(md)).toBeLessThan(estimateTokens(old));
+  });
+
+  it('keeps the sections a short index when the whole conversation follows', () => {
+    const goal = section(md, '목표와 요청 흐름');
+    expect(goal).not.toContain('답변 요지');
+    expect(section(md, '현재 진행 상황')).toMatch(/마지막 AI 응답 \[#m6\]: 아래 대화 원문에 전체가 있습니다/);
+    const long = `${'이번 캠페인의 문구 원칙을 정리합니다. '.repeat(20)}마지막으로 해시태그는 세 개까지만.`;
+    const md3 = runHandoff(makeConv([msg('user', '초안 써줘'), msg('assistant', '초안입니다.'), msg('user', long), msg('assistant', '반영했습니다.')]), { now: 0 }).markdown;
+    const req = section(md3, '현재 진행 상황').split('\n').filter((l) => l.startsWith('> '));
+    expect(req.join('\n').length).toBeLessThan(260);
+    expect(md3).not.toContain('To the AI reading this');
   });
 });

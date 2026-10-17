@@ -110,7 +110,12 @@ export function route(req: MockRequest): MockResponse | null {
         '<script>document.cookie = "oai-did=e2e-device; path=/";</script>',
       );
     }
-    if (u.pathname === `/c/${BIG_ID}`) return html('Synthetic 1M - ChatGPT', '<main><div data-message-author-role="user"><div class="whitespace-pre-wrap">q</div></div></main>');
+    if (u.pathname === `/c/${BIG_ID}`) {
+      return html(
+        'Synthetic 1M - ChatGPT',
+        `<main><div data-message-author-role="user"><div class="whitespace-pre-wrap">q</div></div><div data-message-author-role="assistant"><div class="markdown"><p>a</p></div></div>${ACTIONS_CHATGPT}</main>`,
+      );
+    }
     if (u.pathname === `/backend-api/conversation/${BIG_ID}`) {
       return { status: 200, headers: { 'content-type': 'application/json' }, body: bigConversationJson() };
     }

@@ -46,6 +46,24 @@ async function freezeVisual(p: Page, inPanel = false): Promise<void> {
   }, inPanel);
 }
 
+/**
+ * Counts how often the busy spinner is created inside `root` (the popup's status box or the page
+ * panel). Each re-creation restarts its rotation, which is what made it stutter (fixed in v1.3.4).
+ */
+async function watchSpinner(p: Page, inPanel: boolean): Promise<void> {
+  await p.evaluate((inPanel) => {
+    const w = window as unknown as { __spin?: { created: number } };
+    const state = { created: 0 };
+    w.__spin = state;
+    const root: Node = inPanel ? document.querySelector('[data-lucian-panel]')!.shadowRoot! : document.getElementById('status')!;
+    const isSpinner = (n: Node) => n instanceof Element && (n.matches('svg') ? n : n.querySelector('svg'))?.innerHTML.includes('M21 12a9 9 0 0 0-9-9');
+    new MutationObserver((ms) => {
+      for (const m of ms) for (const n of m.addedNodes) if (isSpinner(n)) state.created++;
+    }).observe(root, { childList: true, subtree: true });
+  }, inPanel);
+}
+const spinnerCreated = (p: Page) => p.evaluate(() => (window as unknown as { __spin?: { created: number } }).__spin?.created ?? -1);
+
 const log = (...a: unknown[]) => process.env.E2E_DEBUG && process.stderr.write(`[e2e] ${a.map(String).join(' ')}\n`);
 let browser: Browser;
 let extId = '';
@@ -413,8 +431,11 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       log('1M', JSON.stringify(row));
       return row;
     };
+    await watchSpinner(popup, false);
     const cold = await runAndWait(tabId, '#handoffBtn', 300_000);
     expect(cold.job.phase, JSON.stringify(cold.job.error)).toBe('done');
+    // The spinner must keep turning: created once per job, never re-created on progress updates.
+    expect(await spinnerCreated(popup), 'popup spinner re-created during the 1M handoff').toBeLessThanOrEqual(1);
     record('handoff (cold)', cold);
     // Requirement: < 10 s from "data acquired" to "Markdown done".
     expect(cold.job.timings.processMs ?? Infinity).toBeLessThan(10_000);
@@ -424,7 +445,9 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
     record('handoff (warm cache)', warm);
     for (const format of ['md', 'html', 'docx', 'hwpx'] as const) {
       seenProgress.length = 0;
+      await watchSpinner(popup, false);
       const r = await runAndWait(tabId, `.fmt[data-format="${format}"]`, 300_000);
+      expect(await spinnerCreated(popup), `popup spinner re-created during the 1M ${format} export`).toBeLessThanOrEqual(1);
       expect(r.job.phase, `${format}: ${JSON.stringify(r.job.error)}`).toBe('done');
       const row = record(format, r);
       const pcts = seenProgress.filter((p) => p.phase === 'processing' && p.label === 'percent').map((p) => p.done ?? 0);
@@ -432,6 +455,30 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       // Long builds report a processing percentage (popup / panel show "(n% 완료)").
       if (format === 'docx' || format === 'hwpx') expect(pcts.some((p) => p > 0 && p < 100), `${format} percent updates`).toBe(true);
     }
+    // Same through the in-page panel: the spinner there and on the page button stays one element.
+    const bigPage = (await browser.pages()).find((p) => p.url() === PAGES.big)!;
+    await bigPage.bringToFront();
+    const trigger = await bigPage.waitForSelector('[data-lucian-action] >>> button');
+    await trigger!.click();
+    const primary = await bigPage.waitForSelector('[data-lucian-panel] >>> .primary', { visible: true });
+    await watchSpinner(bigPage, true);
+    const buttonIcons = await bigPage.evaluate(() => {
+      const w = window as unknown as { __btnSpin: number };
+      w.__btnSpin = 0;
+      const icon = document.querySelector('[data-lucian-action]')!.shadowRoot!.querySelector('.icon')!;
+      new MutationObserver((ms) => { for (const m of ms) w.__btnSpin += m.addedNodes.length ? 1 : 0; }).observe(icon, { childList: true });
+      return true;
+    });
+    expect(buttonIcons).toBe(true);
+    const t0 = Date.now();
+    await primary!.click();
+    const viaPanel = await waitJob(tabId, (j) => j.startedAt >= t0 - 50 && ['done', 'error'].includes(j.phase), 300_000);
+    expect(viaPanel.phase, JSON.stringify(viaPanel.error)).toBe('done');
+    await new Promise((r) => setTimeout(r, 600));
+    expect(await spinnerCreated(bigPage), 'panel spinner re-created during the 1M handoff').toBeLessThanOrEqual(1);
+    // Busy on, busy off: the page button's icon changes twice at most.
+    expect(await bigPage.evaluate(() => (window as unknown as { __btnSpin: number }).__btnSpin), 'page button icon re-created').toBeLessThanOrEqual(2);
+
     const result = { chrome: CHROME?.match(/mac_arm-([\d.]+)/)?.[1] ?? CHROME, date: new Date().toISOString(), rows };
     writeFileSync(join(OUT, 'perf-1m.json'), JSON.stringify(result, null, 2));
     mkdirSync('bench-results', { recursive: true });
