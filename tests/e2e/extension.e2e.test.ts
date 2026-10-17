@@ -10,6 +10,7 @@ import { strFromU8, unzipSync } from 'fflate';
 import puppeteer, { type Browser, type CDPSession, type Page, type Target } from 'puppeteer-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { JobState } from '../../src/shared/types';
+import { handoffFilename } from '../../src/shared/util';
 import { PAGES, calls, failApi, hiddenEarlierConversation, route } from './mock-sites';
 
 const DIST = resolve('dist');
@@ -63,6 +64,12 @@ async function watchSpinner(p: Page, inPanel: boolean): Promise<void> {
   }, inPanel);
 }
 const spinnerCreated = (p: Page) => p.evaluate(() => (window as unknown as { __spin?: { created: number } }).__spin?.created ?? -1);
+
+/** The handoff file is named after the conversation title (v1.3.5); Chrome may add " (n)". */
+const handoffName = (title: string | undefined, at: number) => {
+  const stem = handoffFilename(title, at).replace(/\.md$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`${stem}( \\(\\d+\\))?\\.md$`);
+};
 
 const log = (...a: unknown[]) => process.env.E2E_DEBUG && process.stderr.write(`[e2e] ${a.map(String).join(' ')}\n`);
 let browser: Browser;
@@ -277,10 +284,12 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       const tabId = await tabIdFor(PAGES[site]);
       const job = await waitJob(tabId, (j) => j.startedAt >= t0 - 50 && ['done', 'error'].includes(j.phase));
       expect(job.phase, `${site}: ${JSON.stringify(job.error)}`).toBe('done');
-      expect(job.result?.filename, site).toMatch(/^lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
+      expect(job.title, site).toBeTruthy();
+      expect(job.result?.filename, site).toMatch(handoffName(job.title, job.startedAt));
+      expect(job.result?.filename, site).toMatch(/^[^/]+-lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
       expect(job.result?.verification.checks.some((c) => c.code === 'download.renamed')).toBe(false);
       expect(job.result?.verification.level, `${site}: ${JSON.stringify(job.result?.verification.checks)}`).toBe('ok');
-      expect(newestDownload('md', job.startedAt)).toMatch(/lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
+      expect(newestDownload('md', job.startedAt)).toMatch(handoffName(job.title, job.startedAt));
       // The panel reports the result itself (UI language follows the browser: Korean or English;
       // headless Chrome on Linux ignores --lang for chrome.i18n).
       await page.waitForFunction(
@@ -352,7 +361,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       const h = await runAndWait(tabId, '#handoffBtn');
       expect(h.job.phase, JSON.stringify(h.job.error)).toBe('done');
       const handoffFile = newestDownload('md', h.job.startedAt);
-      expect(handoffFile).toMatch(/lucian-handoff-\d{4}-\d{2}-\d{2}( \(\d+\))?\.md$/);
+      expect(handoffFile).toMatch(handoffName(h.job.title, h.job.startedAt));
       const handoff = readFileSync(handoffFile, 'utf8');
       expect(handoff).toMatch(/## (0\. 기본 정보|0\. Source)/);
       expect(handoff).toMatch(/\[#m1\]/);

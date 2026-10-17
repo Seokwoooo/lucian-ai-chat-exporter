@@ -9,6 +9,7 @@ import { markdownToTxt } from '../../src/export/txt';
 import { scanXmlWellFormed } from '../../src/export/verify';
 import type { AssetStatus } from '../../src/shared/messages';
 import type { ExportFormat } from '../../src/shared/types';
+import { handoffFilename } from '../../src/shared/util';
 import { IMG_A, IMG_B, IMG_MISSING, sampleConversation, sampleImages } from '../fixtures/sample-conversation';
 
 const win = new Window();
@@ -54,6 +55,30 @@ describe('markdown serializer', () => {
     expect(md).not.toContain('사용자는 재귀 구현을 원한다');
     expect(md).toContain('1. [Fibonacci sequence - Wikipedia](https://en.wikipedia.org/wiki/Fibonacci_sequence)');
     expect(md).toContain('첨부파일: **requirements.txt** (text/plain, 2.0 KB)');
+  });
+});
+
+describe('file names and pasted text (v1.3.5)', () => {
+  it('puts the conversation title in front of the handoff file name', () => {
+    const now = Date.UTC(2026, 9, 18, 3, 0, 0);
+    expect(handoffFilename('Garden watering schedule', now)).toBe('Garden-watering-schedule-lucian-handoff-2026-10-18.md');
+    expect(handoffFilename('텃밭 일정/물주기: 정리?', now)).toBe('텃밭-일정물주기-정리-lucian-handoff-2026-10-18.md');
+    expect(handoffFilename('', now)).toBe('lucian-handoff-2026-10-18.md');
+    expect(handoffFilename(undefined, now)).toBe('lucian-handoff-2026-10-18.md');
+    const long = handoffFilename('가'.repeat(300), now);
+    expect(long).toBe(`${'가'.repeat(50)}-lucian-handoff-2026-10-18.md`);
+    expect(new TextEncoder().encode(long).length).toBeLessThanOrEqual(200);
+    expect(new TextEncoder().encode(handoffFilename('😀'.repeat(100), now)).length).toBeLessThanOrEqual(200);
+  });
+
+  it('labels a nameless attachment (Claude pasted text) instead of leaving the name empty', () => {
+    const conv = sampleConversation();
+    conv.messages[0].contents.push({ type: 'attachment', attachment: { name: '', mime_type: 'txt', size: 4241, extractedText: '붙여넣은 메모의 첫 줄입니다.' } });
+    const md = conversationToMarkdown(conv, { locale: 'ko' }).text;
+    expect(md).toContain('첨부파일: **붙여넣은 텍스트** (txt, 4.1 KB)');
+    expect(md).toContain('추출된 텍스트 — 붙여넣은 텍스트');
+    expect(md).not.toContain('****');
+    expect(conversationToMarkdown(conv, { locale: 'en' }).text).toContain('**Pasted text**');
   });
 });
 

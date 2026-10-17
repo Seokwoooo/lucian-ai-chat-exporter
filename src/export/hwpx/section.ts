@@ -1,6 +1,6 @@
 // HWPX section0.xml writer: paragraphs, runs, hyperlink fields, tables and pictures.
 
-import { t, formatBytes, type Locale } from '../../shared/i18n';
+import { attachmentName, t, formatBytes, type Locale } from '../../shared/i18n';
 import type { Conversation, ExportContent, ExportMessage } from '../../shared/types';
 import { escapeXml, formatDateTime } from '../../shared/util';
 import { EMBEDDABLE, fitSize, type ImageStore } from '../images';
@@ -460,7 +460,7 @@ export class SectionWriter {
         const meta = [a.mime_type, a.size ? formatBytes(a.size) : ''].filter(Boolean).join(', ');
         this.push(
           this.paragraph(
-            [this.textRun(`${t(L, 'doc.attachment')}: `, { color: MUTED }), this.textRun(a.name ?? 'file', { bold: true }), ...(meta ? [this.textRun(` (${meta})`, { color: MUTED })] : [])],
+            [this.textRun(`${t(L, 'doc.attachment')}: `, { color: MUTED }), this.textRun(attachmentName(a, L), { bold: true }), ...(meta ? [this.textRun(` (${meta})`, { color: MUTED })] : [])],
             this.reg.para({}),
           ),
         );

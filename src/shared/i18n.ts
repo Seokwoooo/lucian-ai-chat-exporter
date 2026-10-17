@@ -125,6 +125,8 @@ const ko = {
   'doc.messages': '메시지',
   'doc.model': '모델',
   'doc.attachment': '첨부파일',
+  'doc.pastedText': '붙여넣은 텍스트',
+  'doc.file': '파일',
   'doc.sources': '출처',
   'doc.tool': '도구',
   'doc.toolClipped': '({n}자 생략 — 전체 내용은 JSON·ZIP 백업에 있습니다)',
@@ -269,6 +271,8 @@ const en: Record<MessageKey, string> = {
   'doc.messages': 'Messages',
   'doc.model': 'Model',
   'doc.attachment': 'Attachment',
+  'doc.pastedText': 'Pasted text',
+  'doc.file': 'file',
   'doc.sources': 'Sources',
   'doc.tool': 'Tool',
   'doc.toolClipped': '({n} characters omitted — the JSON/ZIP backup has the full output)',
@@ -306,6 +310,16 @@ export function t(locale: Locale, key: MessageKey, params?: Record<string, strin
     for (const [k, v] of Object.entries(params)) s = s.split(`{${k}}`).join(String(v));
   }
   return s;
+}
+
+/**
+ * Display name of an attachment. Claude stores long pasted text as an attachment without a name
+ * (`file_name: ""`), which documents used to show as an empty label.
+ */
+export function attachmentName(a: { name?: string; extractedText?: string } | undefined, locale: Locale): string {
+  const n = a?.name?.trim();
+  if (n) return n;
+  return t(locale, a?.extractedText ? 'doc.pastedText' : 'doc.file');
 }
 
 export function formatBytes(n: number): string {

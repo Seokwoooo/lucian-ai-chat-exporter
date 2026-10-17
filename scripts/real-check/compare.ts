@@ -53,6 +53,7 @@ const TEMPLATE_BITS = [
   /\(길어서 가운데 일부 생략\)|\(middle omitted[^)]*\)/g,
   /_\(… \d+줄 생략 — 같거나 거의 같은 내용이 아래[^)]*\)_|_\(… \d+ lines omitted — the same or nearly the same text[^)]*\)_/g,
   /마지막 AI 응답 \[#m\d+\]: 아래 대화 원문에 전체가 있습니다\.|The last AI reply \[#m\d+\] is in the transcript below in full\./g,
+  /\(첨부 \d+개: .*? — (?:「첨부 자료」|아래 대화 원문 \[#m\d+\])\)|\(\d+ attachments: .*? — (?:see “Attachments”|in the transcript below, \[#m\d+\])\)/g,
   /⚠️[^\n]*/g,
   /\s×\d+\b/g,
 ];
@@ -178,6 +179,9 @@ const agg = {
   transcriptLines: { total: 0, ok: 0 },
   /** Runs of lines shown once because a later message repeats them (revised drafts). */
   repeatNotes: 0,
+  /** Handoffs with an attachments section, and listed entries without text (files, images). */
+  attachmentSections: 0,
+  attachmentEntries: 0,
 };
 const report: string[] = [];
 
@@ -258,6 +262,21 @@ for (const { name, conv, md } of pairs) {
           else t.examples.push(`[link not in conversation] ${u.slice(0, 90)}`);
         }
       }
+      continue;
+    }
+    if (/첨부 자료|Attachments/.test(sec.title)) {
+      // Verbatim attachment text (fenced, under a heading with its [#mN]) is traced like code;
+      // names, sizes and notes around it are the renderer's own words.
+      let inFence = false;
+      const kept: string[] = [];
+      for (const line of sec.lines) {
+        const isFence = /^\s*(```|~~~)/.test(line);
+        if (isFence) inFence = !inFence;
+        if (isFence || inFence || /^#{2,6}\s/.test(line)) kept.push(line);
+        else if (/\[#m\d+\]/.test(line)) agg.attachmentEntries++;
+      }
+      trace(kept, srcNorm, allNorm, allRaw, t);
+      agg.attachmentSections++;
       continue;
     }
     trace(sec.lines, srcNorm, allNorm, allRaw, t);

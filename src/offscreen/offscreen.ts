@@ -5,7 +5,7 @@
 import { getAsset, getConversation } from '../shared/db';
 import type { BuildRequest, BuildResponse } from '../shared/messages';
 import type { Conversation, HandoffStats, JobTimings, VerificationCheck } from '../shared/types';
-import { formatDate } from '../shared/util';
+import { handoffFilename } from '../shared/util';
 import { describeImage, EMBEDDABLE, type ImageStore, type StoredImage } from '../export/images';
 import { buildVerification, levelOf } from '../export/verify';
 import type { WorkerMessage } from '../handoff/worker';
@@ -129,7 +129,7 @@ async function buildHandoff(req: BuildRequest, conv: Conversation): Promise<Buil
   return {
     ok: true,
     blobUrl: blobUrl(bytes, 'text/markdown;charset=utf-8'),
-    filename: `lucian-handoff-${formatDate(Date.now())}.md`,
+    filename: handoffFilename(conv.title, Date.now()),
     mime: 'text/markdown',
     bytes: bytes.byteLength,
     verification,

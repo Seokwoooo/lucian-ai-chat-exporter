@@ -22,7 +22,7 @@ import {
   type IRunOptions,
   type ParagraphChild,
 } from 'docx';
-import { t, formatBytes, type Locale } from '../shared/i18n';
+import { attachmentName, t, formatBytes, type Locale } from '../shared/i18n';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 import { EMBEDDABLE, fitSize, type ImageStore } from './images';
@@ -326,7 +326,7 @@ function contentBlocks(c: ExportContent, ctx: Ctx): Block[] {
         new Paragraph({
           children: [
             new TextRun({ text: `${t(L, 'doc.attachment')}: `, color: '6E6E73' }),
-            new TextRun({ text: a.name ?? 'file', bold: true }),
+            new TextRun({ text: attachmentName(a, L), bold: true }),
             ...(meta ? [new TextRun({ text: ` (${meta})`, color: '6E6E73' })] : []),
           ],
         }),

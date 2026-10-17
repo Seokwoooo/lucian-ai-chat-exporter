@@ -7,7 +7,7 @@ Guidance for Claude Code (and other contributors) working in this repository.
 **Lucian AI Chat Exporter** — a Chrome MV3 extension with exactly two features:
 
 1. **Handoff** — one click turns the current ChatGPT / Claude / Gemini / Grok conversation into an
-   extractive handoff Markdown file (`lucian-handoff-YYYY-MM-DD.md`) that another AI can continue from.
+   extractive handoff Markdown file (`<chat-title>-lucian-handoff-YYYY-MM-DD.md`) that another AI can continue from.
    Zero settings. No LLM, no embeddings, no external API — rule-based TypeScript only.
 2. **Export** — the full conversation as PDF (Chrome print engine, local), Markdown, Word (.docx),
    Hangul (.hwpx, real OWPML), HTML, TXT, JSON or a ZIP backup, with completeness verification.
@@ -80,6 +80,8 @@ popup            src/popup/*                two cards: handoff button, export fo
   section only, tables/headings never become bullets, every section stays within its budget share.
   A revised draft is shown once (earlier copies become a `_(… N줄 생략 …)_` note, `collapseRepeats`),
   and when the whole conversation is included the sections only index it (`fullIndex`).
+  Attachment text the record has (pasted text, text files) goes into “첨부 자료” verbatim within
+  `attachShare`; files without text are listed so the next AI can ask for them (v1.3.5).
 - User-facing strings go through `src/shared/i18n.ts` (Korean default, English supported).
 - Fixtures must be synthetic — never commit real conversations, cookies or tokens.
 - Site structures change: when a real-site check finds a new shape (e.g. ChatGPT `channel:

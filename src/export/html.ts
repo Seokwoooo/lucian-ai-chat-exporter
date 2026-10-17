@@ -2,7 +2,7 @@
 // print page that produces PDFs locally. Raw HTML inside messages is always escaped so the
 // output shows exactly what the chat showed and never executes page content.
 
-import { t, formatBytes, type Locale } from '../shared/i18n';
+import { attachmentName, t, formatBytes, type Locale } from '../shared/i18n';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { escapeHtml, formatDateTime } from '../shared/util';
 import { messageHeaderText, roleLabel, toolDocText } from './markdown';
@@ -228,7 +228,7 @@ function renderContent(c: ExportContent, ctx: Ctx): string {
       const a = c.attachment ?? {};
       const key = a.url ?? (a.fileId ? `file:${a.fileId}` : undefined);
       const href = key ? ctx.env.attachmentHref?.(key) : undefined;
-      const name = escapeHtml(a.name ?? 'file');
+      const name = escapeHtml(attachmentName(a, L));
       const meta = [a.mime_type, a.size ? formatBytes(a.size) : ''].filter(Boolean).join(' · ');
       let s = `<div class="attachment"><span class="label">${escapeHtml(t(L, 'doc.attachment'))}</span> ${href ? `<a href="${attr(href)}">${name}</a>` : `<strong>${name}</strong>`}${meta ? ` <span class="meta">${escapeHtml(meta)}</span>` : ''}</div>`;
       if (a.extractedText) {

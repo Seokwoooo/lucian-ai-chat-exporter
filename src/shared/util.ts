@@ -79,8 +79,33 @@ export function safeFilename(stem: string, ext: string, fallback = 'conversation
   let s = (stem || '').normalize('NFC').replace(RESERVED, '').replace(/\s+/g, '-');
   s = s.replace(/-+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
   if (!s) s = fallback;
-  if (s.length > 150) s = s.slice(0, 150).replace(/-+$/, '');
+  s = clipBytes(s.length > 150 ? s.slice(0, 150) : s, 200).replace(/-+$/, '');
   return `${s}.${ext}`;
+}
+
+/** Cuts text to at most `max` UTF-8 bytes on a character boundary (file names: 255 bytes on macOS). */
+function clipBytes(text: string, max: number): string {
+  const enc = new TextEncoder();
+  if (enc.encode(text).length <= max) return text;
+  const chars = Array.from(text);
+  let bytes = 0;
+  let k = 0;
+  for (; k < chars.length; k++) {
+    bytes += enc.encode(chars[k]).length;
+    if (bytes > max) break;
+  }
+  return chars.slice(0, k).join('');
+}
+
+/**
+ * Handoff file name: the conversation title first, so files from different chats are easy to tell
+ * apart, then `lucian-handoff-YYYY-MM-DD` (v1.3.5). Without a title only the second part is used.
+ */
+export function handoffFilename(title: string | undefined, now: number): string {
+  // At most 150 UTF-8 bytes of title (50 Korean characters), so the whole name stays far below
+  // the 255-byte file-name limit even with Chrome's " (12)".
+  const head = clipBytes(safeFilename(title ?? '', 'md', '').replace(/\.md$/, ''), 150).replace(/-+$/, '');
+  return `${head ? `${head}-` : ''}lucian-handoff-${formatDate(now)}.md`;
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {

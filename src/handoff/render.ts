@@ -40,6 +40,28 @@ export interface PastItem {
   table?: boolean;
 }
 
+/**
+ * A file or pasted text the conversation carried (v1.3.5). Its text is shown verbatim when the
+ * message is not in the transcript below: whole, or head and tail when it is long.
+ */
+export interface AttachmentItem {
+  m: number;
+  role: Role;
+  /** Empty for Claude's pasted text (shown as "붙여넣은 텍스트"). */
+  name: string;
+  mime?: string;
+  image?: boolean;
+  /** Tokens of the extracted text (0 when the record has no text, e.g. a PDF or an image). */
+  tokens: number;
+  /** Verbatim text (possibly clipped) when shown here. */
+  text?: string;
+  clipped?: boolean;
+  /** The message is in the transcript below, which shows the text. */
+  inTranscript?: boolean;
+  /** Has text, but the budget left none for it. */
+  omitted?: boolean;
+}
+
 /** One later user request, optionally with the lead sentence of the answer it received. */
 export interface RequestItem {
   m: number;
@@ -94,6 +116,9 @@ export interface HandoffDoc {
   codeInRecent: number[];
   past: PastItem[];
   recent: RecentMessage[];
+  attachments: AttachmentItem[];
+  /** Attachments not listed (beyond the list cap). */
+  attachmentsMore: number;
   uncertainCount: number;
 }
 
@@ -149,6 +174,19 @@ const L = {
     truncatedCode: '일부 생략',
     links: '참고 링크 · 출처',
     linksOmitted: '… 덜 언급된 링크 {n}개는 생략했습니다',
+    attachments: '첨부 자료 (원문 그대로)',
+    attachTokens: '약 {n}토큰',
+    pasted: '붙여넣은 텍스트',
+    file: '파일',
+    image: '이미지',
+    attachIn: '(첨부 {n}개: {names} — 「첨부 자료」)',
+    attachInBelow: '(첨부 {n}개: {names} — 아래 대화 원문 {ref})',
+    attachBelow: '(내용은 아래 대화 원문 {ref}에 있습니다)',
+    attachBare: '내용을 넣을 수 없는 파일 · 이미지',
+    attachNoText: '(대화 기록에 이 파일들의 내용이 텍스트로 없어서 넣지 못했습니다. 필요하면 사용자에게 다시 첨부해 달라고 하세요.)',
+    attachOmitted: '(분량 때문에 내용은 넣지 못했습니다. 필요하면 사용자에게 다시 첨부해 달라고 하세요.)',
+    attachClipped: '(길어서 앞뒤만 넣었습니다. 전체가 필요하면 사용자에게 원본을 요청하세요.)',
+    attachMore: '… 첨부 {n}개는 목록에서 생략했습니다',
     past: '중요한 맥락 (원문 발췌)',
     recent: '최근 대화 원문',
     transcript: '전체 대화 원문',
@@ -217,6 +255,19 @@ const L = {
     truncatedCode: 'partly omitted',
     links: 'Links & sources',
     linksOmitted: '… {n} less referenced links omitted',
+    attachments: 'Attachments (verbatim)',
+    attachTokens: '~{n} tokens',
+    pasted: 'Pasted text',
+    file: 'File',
+    image: 'Image',
+    attachIn: '({n} attachments: {names} — see “Attachments”)',
+    attachInBelow: '({n} attachments: {names} — in the transcript below, {ref})',
+    attachBelow: '(its content is in the transcript below, {ref})',
+    attachBare: 'Files and images without text',
+    attachNoText: '(the conversation record has no text for these, so they are not included; ask the user to attach them again if needed)',
+    attachOmitted: '(not included for lack of space; ask the user to attach it again if needed)',
+    attachClipped: '(long — only its beginning and end are included; ask the user for the original if you need all of it)',
+    attachMore: '… {n} more attachments not listed',
     past: 'Important context (verbatim excerpts)',
     recent: 'Recent conversation (verbatim)',
     transcript: 'Full conversation (verbatim)',
@@ -272,6 +323,19 @@ export function renderHandoff(doc: HandoffDoc): string {
   };
   const list = (items: Item[], max = 600) => items.map((i) => line(i, '', max)).join('\n');
 
+  const attName = (a: AttachmentItem) => a.name || (a.image ? S.image : a.tokens ? S.pasted : S.file);
+  const attMeta = (a: AttachmentItem) => {
+    const type = a.image ? '' : (a.mime ?? '').replace(/^application\//, '');
+    const parts = [type && type.length <= 24 ? type : '', a.tokens ? fill(S.attachTokens, { n: a.tokens.toLocaleString('en-US') }) : ''].filter(Boolean);
+    return parts.length ? ` · ${parts.join(' · ')}` : '';
+  };
+  // Pointers from requests name files and pasted text; images already read "[이미지: …]" there.
+  const attOf = (m: number) => doc.attachments.filter((a) => a.m === m && !a.image);
+  const attNames = (list: AttachmentItem[]) => {
+    const names = list.slice(0, 3).map(attName).join(', ');
+    return list.length > 3 ? `${names} …` : names;
+  };
+
   const out: string[] = [];
   let n = 0;
   const section = (title: string) => {
@@ -298,10 +362,17 @@ export function renderHandoff(doc: HandoffDoc): string {
   out.push('');
 
   section(S.goal);
-  if (doc.goal.length) {
+  const firstM = conv.messages.findIndex((x) => x.role === 'user');
+  const firstAtt = firstM >= 0 ? attOf(firstM) : [];
+  if (doc.goal.length || firstAtt.length) {
     out.push(`**${S.goalFirst}**`);
     out.push('');
-    out.push(list(doc.goal));
+    if (doc.goal.length) out.push(list(doc.goal));
+    // The first request is often about what it attached ("아래 글 어떻게 생각해?").
+    if (firstAtt.length) {
+      const below = firstAtt.every((a) => a.inTranscript);
+      out.push(`- ${fill(below ? S.attachInBelow : S.attachIn, { n: firstAtt.length, names: attNames(firstAtt), ref: ref(firstM) })} ${ref(firstM)}`);
+    }
     out.push('');
   }
   if (doc.requests.length) {
@@ -314,9 +385,41 @@ export function renderHandoff(doc: HandoffDoc): string {
         out.push(`- ${fill(S.requestsOmitted, { n: doc.requestsOmitted })}`);
         shownOmission = true;
       }
-      out.push(`- ${r.text} ${ref(r.m)}${r.repeats ? ` ${fill(S.similar, { n: r.repeats })}` : ''}`);
+      const ra = attOf(r.m);
+      out.push(`- ${r.text} ${ref(r.m)}${r.repeats ? ` ${fill(S.similar, { n: r.repeats })}` : ''}${ra.length ? ` ${fill(S.attachIn, { n: ra.length, names: attNames(ra) })}` : ''}`);
       if (r.lead) out.push(`  - ${S.leadPrefix} ${r.lead.text} ${ref(r.lead.m)}`);
     }
+    out.push('');
+  }
+
+  if (doc.attachments.length) {
+    section(S.attachments);
+    const withText = doc.attachments.filter((a) => a.tokens > 0);
+    const bare = doc.attachments.filter((a) => a.tokens === 0);
+    if (doc.index) {
+      // The whole conversation follows (with the text of each attachment): a list is enough.
+      out.push(withText.map((a) => `- ${attName(a)}${attMeta(a)} ${ref(a.m)}`).join('\n'));
+    } else {
+      for (const a of withText) {
+        out.push(`### ${attName(a)}${attMeta(a)} ${ref(a.m)}`);
+        out.push('');
+        if (a.text) {
+          const fc = fence(a.text);
+          out.push(`${fc}text\n${a.text}\n${fc}`);
+          if (a.clipped) out.push(S.attachClipped);
+        } else if (a.inTranscript) out.push(fill(S.attachBelow, { ref: ref(a.m) }));
+        else out.push(S.attachOmitted);
+        out.push('');
+      }
+    }
+    // Files and images the record has no text for: one list, one note.
+    if (bare.length) {
+      if (withText.length && !doc.index) out.push(`### ${S.attachBare}`, '');
+      out.push(bare.map((a) => `- ${attName(a)}${attMeta(a)} ${ref(a.m)}`).join('\n'));
+      out.push('');
+      out.push(S.attachNoText);
+    }
+    if (doc.attachmentsMore) out.push(fill(S.attachMore, { n: doc.attachmentsMore }));
     out.push('');
   }
 
@@ -371,6 +474,8 @@ export function renderHandoff(doc: HandoffDoc): string {
     out.push('');
     out.push(clipped.split('\n').map((l) => `> ${l}`).join('\n'));
     if (clipped !== text && below) out.push(`> ${fill(below.clipped ? S.moreBelow : S.fullBelow, { ref: ref(doc.lastUser) })}`);
+    const la = attOf(doc.lastUser);
+    if (la.length) out.push(`> ${fill(below ? S.attachInBelow : S.attachIn, { n: la.length, names: attNames(la), ref: ref(doc.lastUser) })}`);
     out.push('');
   }
   if (doc.lastAssistant > doc.lastUser && doc.lastAssistantKey.length) {

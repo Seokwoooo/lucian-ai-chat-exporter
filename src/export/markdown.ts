@@ -1,7 +1,7 @@
 // Conversation → Markdown serializer (tech doc §25.1 fm/Ax). The Markdown string is also the
 // intermediate representation used by the TXT, HTML/PDF, DOCX and HWPX exporters.
 
-import { t, formatBytes, type Locale } from '../shared/i18n';
+import { attachmentName, t, formatBytes, type Locale } from '../shared/i18n';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 
@@ -117,7 +117,7 @@ export function contentToMarkdown(c: ExportContent, opts: MdOptions): string {
       const a = c.attachment ?? {};
       const key = a.url ?? (a.fileId ? `file:${a.fileId}` : undefined);
       const local = key ? opts.attachmentHref?.(key) : undefined;
-      const name = a.name ?? 'file';
+      const name = attachmentName(a, L);
       const meta = [a.mime_type, sizeLabel(a.size)].filter(Boolean).join(', ');
       const label = local ? `[${name}](${local})` : `**${name}**`;
       let s = `> ${t(L, 'doc.attachment')}: ${label}${meta ? ` (${meta})` : ''}`;

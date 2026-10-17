@@ -490,3 +490,73 @@ describe('revised drafts and the full-transcript index (v1.3.4)', () => {
     expect(md3).not.toContain('To the AI reading this');
   });
 });
+
+describe('attachments and pasted text (v1.3.5)', () => {
+  // Real-data shape (Claude, 2026-10; content synthetic): the first request asks about "the note
+  // below" and the note itself is a nameless pasted-text attachment; 80+ messages follow, so the
+  // first message is far outside the transcript. The attachment used to be missing entirely.
+  const thought = [
+    '베란다 텃밭은 햇빛이 드는 시간보다 바람이 지나가는 길을 먼저 봐야 한다.',
+    '물은 겉흙이 마른 다음 날 아침에 주고, 화분 받침의 물은 바로 버린다.',
+    '상추는 겉잎부터 따면 한 포기로 한 달 넘게 먹을 수 있다.',
+  ].join('\n');
+  const first = msg('user', '아래 메모 어떻게 생각해?');
+  first.contents.push({ type: 'attachment', attachment: { name: '', mime_type: 'txt', size: 900, extractedText: thought } });
+  const turns = () =>
+    Array.from({ length: 40 }, (_, k) => [
+      msg('user', `${k + 1}번째 질문: 화분 ${k + 1}번의 잎이 누렇게 되는 이유를 설명해 줘.`),
+      msg('assistant', `화분 ${k + 1}번에 대한 설명입니다. ${'물이 너무 자주 고이면 뿌리가 숨을 쉬지 못해 아래 잎부터 누렇게 됩니다. '.repeat(25)}`),
+    ]).flat();
+  const c = makeConv([first, msg('assistant', '좋은 메모입니다. 바람길을 먼저 보는 점이 특히 실용적입니다.'), ...turns()]);
+  const r = runHandoff(c, { now: 0 });
+  const md = r.markdown;
+
+  it('shows the attached text of the first request verbatim, with a pointer from the request', () => {
+    expect(r.stats.mode).toBe('compressed');
+    const att = section(md, '첨부 자료');
+    for (const line of thought.split('\n')) expect(att).toContain(line);
+    expect(att).toMatch(/^### 붙여넣은 텍스트 · txt · 약 [\d,]+토큰 \[#m1\]$/m);
+    expect(section(md, '목표와 요청 흐름')).toMatch(/- 아래 메모 어떻게 생각해\? \[#m1\]\n- \(첨부 1개: 붙여넣은 텍스트 — 「첨부 자료」\) \[#m1\]/);
+    expect(estimateTokens(md)).toBeLessThanOrEqual(handoffBudget(r.stats.sourceTokens) * 1.02);
+  });
+
+  it('clips a long attachment to its share of the budget and says so', () => {
+    const big = msg('user', '이 문서 검토해 줘');
+    big.contents.push({ type: 'attachment', attachment: { name: 'report.md', mime_type: 'text/markdown', extractedText: Array.from({ length: 900 }, (_, i) => `문단 ${i + 1}: 보고서의 이 부분은 실험 결과 ${i + 1}을 설명합니다.`).join('\n') } });
+    const r2 = runHandoff(makeConv([big, msg('assistant', '검토했습니다.'), ...turns()]), { now: 0 });
+    const att = section(r2.markdown, '첨부 자료');
+    expect(att).toContain('문단 1: 보고서의 이 부분은');
+    expect(att).toContain('문단 900: 보고서의 이 부분은');
+    expect(att).toMatch(/\[약 [\d,]+토큰 생략\]/);
+    expect(att).toContain('길어서 앞뒤만 넣었습니다');
+    expect(estimateTokens(att)).toBeLessThan(handoffBudget(r2.stats.sourceTokens) * 0.16);
+    expect(estimateTokens(r2.markdown)).toBeLessThanOrEqual(handoffBudget(r2.stats.sourceTokens) * 1.02);
+  });
+
+  it('lists files and images the record has no text for once, and points into the transcript for recent ones', () => {
+    const pdf = msg('user', '이 논문 요약해 줘');
+    pdf.contents.push({ type: 'attachment', attachment: { name: 'paper.pdf', mime_type: 'application/pdf' } });
+    const last = msg('user', '이 메모도 반영해 줘');
+    last.contents.push({ type: 'attachment', attachment: { name: 'memo.txt', mime_type: 'text/plain', extractedText: '메모: 결론을 먼저 쓰고 근거는 세 줄 이내로.' } });
+    last.contents.push({ type: 'image', imageUrl: 'https://example.com/a.png', alt: 'screen.png' });
+    const r3 = runHandoff(makeConv([pdf, msg('assistant', '요약했습니다.'), ...turns(), last, msg('assistant', '반영했습니다.')]), { now: 0 });
+    const att = section(r3.markdown, '첨부 자료');
+    expect(att).toMatch(/^### memo\.txt · text\/plain · 약 \d+토큰 \[#m\d+\]\n\n\(내용은 아래 대화 원문 \[#m\d+\]에 있습니다\)/m);
+    expect(att).toMatch(/^- paper\.pdf · pdf \[#m1\]$/m);
+    expect(att).toMatch(/^- screen\.png \[#m\d+\]$/m);
+    expect(att.match(/다시 첨부해 달라고/g)?.length).toBe(1);
+    expect(section(r3.markdown, '현재 진행 상황')).toMatch(/> \(첨부 1개: memo\.txt — 아래 대화 원문 \[#m\d+\]\)/);
+    // Unnamed uploaded images (ChatGPT) are not listed: the request already reads "이미지".
+    const noName = msg('user', '이 화면처럼 바꿔 줘');
+    noName.contents.push({ type: 'image', imageUrl: 'https://example.com/b.png' });
+    expect(runHandoff(makeConv([noName, msg('assistant', '바꿨습니다.'), ...turns()]), { now: 0 }).markdown).not.toContain('첨부 자료');
+  });
+
+  it('only lists attachments when the whole conversation follows, and leaves them out with the v1.2 layout', () => {
+    const short = runHandoff(makeConv([first, msg('assistant', '좋은 메모입니다.')]), { now: 0 });
+    expect(short.stats.mode).toBe('full');
+    expect(section(short.markdown, '첨부 자료').trim().split('\n').slice(1).filter(Boolean)).toEqual([expect.stringMatching(/^- 붙여넣은 텍스트 · txt · 약 \d+토큰 \[#m1\]$/)]);
+    expect(section(short.markdown, '목표와 요청 흐름')).toContain('(첨부 1개: 붙여넣은 텍스트 — 아래 대화 원문 [#m1]) [#m1]');
+    expect(runHandoff(c, { now: 0, layout: { attachShare: 0 } }).markdown).not.toContain('첨부 자료');
+  });
+});

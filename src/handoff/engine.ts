@@ -12,7 +12,7 @@ import { clusterNearDuplicates, minhash } from './minhash';
 import { conceptsOf, greedyCoverage, type CoverItem } from './coverage';
 import { ANAPHOR_RE, CODE_ERROR_RE, F, REVERSAL_RE, bulletText, classify, clipText, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, nameImages, replacementPairs, stripTracking, topicTokens } from './patterns';
 import { segmentMessage, type Unit } from './segment';
-import { renderHandoff, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
+import { renderHandoff, type AttachmentItem, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
 
 export interface CacheEntry {
   flags: number;
@@ -79,6 +79,12 @@ export interface Layout {
    * second copy (v1.3.4).
    */
   fullIndex: boolean;
+  /**
+   * Share of the budget for verbatim attachment text (files and pasted text) of messages outside
+   * the transcript; 0 = no attachment section (v1.3.5). The first and the latest request's
+   * attachments come first.
+   */
+  attachShare: number;
   /** Appendix table of referenced messages (role, time, first line). */
   refIndex: boolean;
   /** How much rule-based relevance raises a unit's coverage gain (0 = concepts only, 1 = up to ×2 over the least relevant). */
@@ -110,6 +116,7 @@ export const DEFAULT_LAYOUT: Layout = {
   repair: true,
   collapseRepeats: true,
   fullIndex: true,
+  attachShare: 0.12,
   refIndex: false,
   relPrior: 0.5,
   filesPer: 200,
@@ -131,6 +138,7 @@ export const V12_LAYOUT: Layout = {
   repair: true,
   collapseRepeats: false,
   fullIndex: false,
+  attachShare: 0,
   refIndex: true,
   relPrior: 0.5,
   filesPer: 200,
@@ -1044,6 +1052,62 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   // A revised draft repeats most of the earlier one: show each line once, in its latest form.
   if (ctx.layout.collapseRepeats) collapseRepeats(recent, ctx.lang);
 
+  // ---------- attachments: files and pasted text ----------
+  // A request like "아래 글 어떻게 생각해?" is about its attachment, which used to be left out
+  // whenever the message was older than the transcript. Text the record has is shown verbatim
+  // (the first and the latest request's attachments first, then newest first); files without text
+  // (PDFs, images) are listed so the next AI can ask for them.
+  const attachments: AttachmentItem[] = [];
+  let attachmentsMore = 0;
+  let attachTokens = 0;
+  if (ctx.layout.attachShare > 0) {
+    const found: AttachmentItem[] = [];
+    conv.messages.forEach((msg, m) => {
+      for (const c of msg.contents) {
+        if (c.type === 'attachment' && c.attachment) {
+          const text = c.attachment.extractedText?.trim();
+          found.push({ m, role: msg.role, name: c.attachment.name?.trim() ?? '', mime: c.attachment.mime_type, tokens: text ? estimateTokens(text) : 0, text: text || undefined });
+        } else if (c.type === 'image' && msg.role === 'user' && c.alt?.trim()) {
+          // Uploaded images are listed by name; unnamed ones (ChatGPT) already read "이미지" in the
+          // request and the transcript, so a nameless entry would add nothing.
+          found.push({ m, role: msg.role, name: c.alt.trim(), image: true, tokens: 0 });
+        }
+      }
+    });
+    const lastUserMsg = conv.messages.map((x) => x.role).lastIndexOf('user');
+    const rank = (a: AttachmentItem) => (a.m === firstUser ? 0 : a.m === lastUserMsg ? 1 : 2);
+    const order = [...found].sort((x, y) => rank(x) - rank(y) || y.m - x.m);
+    let left = full ? Infinity : Math.max(400, capBudget * ctx.layout.attachShare);
+    for (const a of order) {
+      const text = a.text;
+      a.text = undefined;
+      if (!text) continue;
+      if (a.m >= recentFrom) {
+        a.inTranscript = true;
+        continue;
+      }
+      const body = stripTracking(text);
+      if (a.tokens + 30 <= left) {
+        a.text = body;
+      } else if (left >= 300) {
+        a.text = clipMarkdown(body, left - 30, ctx.lang);
+        a.clipped = true;
+      } else {
+        a.omitted = true;
+        continue;
+      }
+      const tok = estimateTokens(a.text) + 30;
+      left -= tok;
+      attachTokens += tok;
+    }
+    const MAX_ATTACH = 30;
+    // Listed in conversation order; beyond the cap, the ones with text shown here are kept.
+    const listed = found.length <= MAX_ATTACH ? found : [...found].sort((x, y) => Number(!!y.text) - Number(!!x.text) || y.m - x.m).slice(0, MAX_ATTACH);
+    attachmentsMore = found.length - listed.length;
+    attachments.push(...[...listed].sort((x, y) => x.m - y.m));
+    attachTokens += attachments.length * 15;
+  }
+
 
   // Code: latest version of each code cluster, highest scoring first, within ~30% of budget.
   const code: CodeItem[] = [];
@@ -1080,7 +1144,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   // words are already covered by what was selected adds little and is skipped.
   const past: PastItem[] = [];
   if (!full) {
-    const used0 = fixedTokens + code.reduce((s, c) => s + estimateTokens(c.text), 0) + recent.reduce((s, r) => s + estimateTokens(r.body), 0);
+    const used0 = fixedTokens + attachTokens + code.reduce((s, c) => s + estimateTokens(c.text), 0) + recent.reduce((s, r) => s + estimateTokens(r.body), 0);
     // Reserve for the header, formatting and (if shown) the reference index; the render pass
     // in runHandoff corrects the estimate either way.
     let remaining = budget - used0 - (ctx.layout.refIndex ? 1500 : 700) + ctx.pastExtra;
@@ -1234,6 +1298,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     codeInRecent: [...codeInRecent].sort((x, y) => x - y),
     past,
     recent,
+    attachments,
+    attachmentsMore,
     uncertainCount: uncertain,
   };
 }

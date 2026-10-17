@@ -1,6 +1,6 @@
 {
   "name": "lucian-ai-chat-exporter",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "private": true,
   "description": "Lucian AI Chat Exporter — one-click AI chat handoff and full-fidelity export for ChatGPT, Claude, Gemini and Grok.",
   "license": "MIT",
