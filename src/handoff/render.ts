@@ -5,6 +5,7 @@
 
 import type { Conversation, Role } from '../shared/types';
 import { formatDateTime } from '../shared/util';
+import { clipText } from './patterns';
 
 export interface Item {
   text: string;
@@ -80,6 +81,8 @@ export interface HandoffDoc {
   lastUser: number;
   lastAssistant: number;
   lastAssistantKey: Item[];
+  /** The last message is an answer with nothing visible yet (still being written, or thinking only). */
+  lastAssistantEmpty: boolean;
   files: Array<{ text: string; m: number; count: number }>;
   commands: Array<{ text: string; m: number }>;
   links: Array<{ text: string; m: number; title?: string; count: number }>;
@@ -126,8 +129,11 @@ const L = {
     current: '현재 진행 상황 (마지막 작업 지점)',
     lastUser: '마지막 사용자 요청',
     fullBelow: '(전체는 아래 대화 원문 {ref})',
+    moreBelow: '(이어지는 내용은 아래 대화 원문 {ref}, 길어서 가운데 일부 생략)',
     lastAssistant: '마지막 AI 응답의 핵심 문장',
     noReply: '마지막 요청에 대한 AI 응답이 아직 없습니다. 이 요청부터 처리하세요.',
+    emptyReply: '마지막 AI 응답 {ref}에는 보이는 내용이 없습니다(추출할 때 아직 생성 중이었거나 생각 과정만 있음). 마지막 사용자 요청부터 처리하세요.',
+    emptyBody: '_(보이는 내용 없음)_',
     open: '미완료 작업 · 해결되지 않은 문제',
     next: '다음에 이어서 할 작업',
     nextFallback: '명시된 다음 단계가 없습니다. 「현재 진행 상황」의 마지막 사용자 요청을 기준으로 이어가세요.',
@@ -191,8 +197,11 @@ const L = {
     current: 'Current state (last point of work)',
     lastUser: 'Last user request',
     fullBelow: '(full text in the transcript below, {ref})',
+    moreBelow: '(continued in the transcript below, {ref}; its middle is omitted)',
     lastAssistant: 'Key sentences of the last AI reply',
     noReply: 'The last request has no AI reply yet. Start by handling it.',
+    emptyReply: 'The last AI reply {ref} has no visible content (it was still being written, or holds only thinking). Start from the last user request.',
+    emptyBody: '_(no visible content)_',
     open: 'Open tasks · unresolved problems',
     next: 'Next steps',
     nextFallback: 'No explicit next steps were stated. Continue from the last user request in “Current state”.',
@@ -231,8 +240,7 @@ function fill(s: string, params: Record<string, string | number>): string {
 }
 
 function oneLine(text: string, max = 600): string {
-  const t = text.replace(/\s*\n\s*/g, ' ').trim();
-  return t.length > max ? `${t.slice(0, max)}…` : t;
+  return clipText(text.replace(/\s*\n\s*/g, ' ').trim(), max);
 }
 
 function fence(code: string): string {
@@ -354,20 +362,24 @@ export function renderHandoff(doc: HandoffDoc): string {
       .map((c) => c.content ?? '')
       .join('\n')
       .trim();
-    // When the request is in the verbatim transcript below, a short quote is enough here.
-    const inTranscript = doc.recent.some((r) => r.m === doc.lastUser && !r.clipped);
-    const max = inTranscript ? 400 : 3000;
-    const clipped = text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+    // When the request is in the verbatim transcript below, a short quote is enough here. A clipped
+    // transcript keeps the request's opening, so a long quote here would only repeat it.
+    const below = doc.recent.find((r) => r.m === doc.lastUser);
+    const max = below ? 400 : 3000;
+    const clipped = clipText(text, max);
     out.push(`**${S.lastUser}** ${ref(doc.lastUser)}`);
     out.push('');
     out.push(clipped.split('\n').map((l) => `> ${l}`).join('\n'));
-    if (clipped !== text && inTranscript) out.push(`> ${fill(S.fullBelow, { ref: ref(doc.lastUser) })}`);
+    if (clipped !== text && below) out.push(`> ${fill(below.clipped ? S.moreBelow : S.fullBelow, { ref: ref(doc.lastUser) })}`);
     out.push('');
   }
   if (doc.lastAssistant > doc.lastUser && doc.lastAssistantKey.length) {
     out.push(`**${S.lastAssistant}** ${ref(doc.lastAssistant)}`);
     out.push('');
     out.push(doc.lastAssistantKey.map((i) => `- ${oneLine(i.text)}`).join('\n'));
+    out.push('');
+  } else if (doc.lastAssistant > doc.lastUser && doc.lastAssistantEmpty) {
+    out.push(fill(S.emptyReply, { ref: ref(doc.lastAssistant) }));
     out.push('');
   } else if (doc.lastUser >= 0 && doc.lastAssistant < doc.lastUser) {
     out.push(S.noReply);
@@ -459,7 +471,7 @@ export function renderHandoff(doc: HandoffDoc): string {
     const meta = [r.role === 'assistant' && r.model ? r.model : '', r.time ? formatDateTime(r.time) : ''].filter(Boolean).join(' · ');
     out.push(`### ${ref(r.m)} ${roleName(r.role)}${meta ? ` · ${meta}` : ''}${r.clipped ? ` ${S.clipped}` : ''}`);
     out.push('');
-    out.push(r.body.trim() || '_(empty)_');
+    out.push(r.body.trim() || S.emptyBody);
     out.push('');
   }
 

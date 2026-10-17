@@ -67,6 +67,12 @@ export function buildVerification(
   // so both numbers are reported.
   if (missing === 0) checks.push({ code: 'messages.match', status: 'pass', params: { exported: source, source, messages: conv.messages.length } });
   else checks.push({ code: 'messages.missing', status: 'fail', params: { missing } });
+  // The last answer may still have been in progress when the user clicked: say so instead of
+  // passing silently (a real handoff once showed only "(empty)" for a long-running answer).
+  const last = conv.messages[conv.messages.length - 1];
+  const lastVisible = last?.contents.some((c) => c.type !== 'thinking' && c.type !== 'sources' && c.type !== 'tool' && (c.content?.trim() || c.imageUrl || c.imageGroup?.images.length || c.attachment));
+  if (ex.warnings.includes('answer-in-progress')) checks.push({ code: 'answer.inProgress', status: 'warn' });
+  else if (last?.role === 'assistant' && !lastVisible) checks.push({ code: 'answer.empty', status: 'warn' });
   if (ex.domUserTurns != null && ex.domUserTurns > userMessages) {
     checks.push({ code: 'dom.more', status: 'warn', params: { dom: ex.domUserTurns, exported: userMessages } });
   }

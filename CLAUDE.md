@@ -27,6 +27,7 @@ npm run bench        # handoff performance on ~100k / ~1M token synthetic conver
 npm run lab          # compression lab on synthetic conversations (algorithms × budgets, retention metrics)
 npm run lab:file -- <in.json> <out.json>  # same lab on a local file of ChatGPT payloads (keep it outside the repo)
 npm run lab:qa -- presence [ratios] [algos]  # QA evaluation on synthetic chats: planted answers present in the document (no AI)
+npm run check:real -- <folder>  # real handoffs vs JSON exports of the same chats (folder outside the repo; see docs/test-report.md §8)
 npm run package      # build + release/lucian-ai-chat-exporter-v<version>.zip
 npm run check        # typecheck + lint + test + build
 ```
@@ -79,6 +80,12 @@ popup            src/popup/*                two cards: handoff button, export fo
 - Fixtures must be synthetic — never commit real conversations, cookies or tokens.
 - Site structures change: when a real-site check finds a new shape (e.g. ChatGPT `channel:
   "commentary"`, virtualized transcripts), add a synthetic fixture that mirrors it before fixing.
+- Real sites keep earlier conversations mounted but hidden after in-app navigation (chatgpt.com,
+  2026-10). DOM counts and the DOM fallback use `renderedElements()` only; the E2E injects a hidden
+  earlier conversation on all four sites and also forces the API to fail.
+- Before releasing a change to collection or the handoff engine, run it on real conversations the
+  way users do (in-app navigation, the in-page panel), export JSON + handoff for each, and run
+  `npm run check:real` on that folder. Mock E2E alone missed the hidden-conversation bug (v1.3.2).
 - Documents show what the user saw: thinking is excluded (JSON/ZIP keep it), long tool output is
   clipped to `TOOL_DOC_LIMIT` with a visible note, uncited search results go to `moreSources`
   (JSON/ZIP only); every such decision is reported in verification.

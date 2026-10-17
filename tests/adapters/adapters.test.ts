@@ -159,3 +159,28 @@ describe('Grok adapter', () => {
     expect(cleanGrokMarkdown('a<grok:render type="x"><argument name="y">1</argument></grok:render>b', [])).toBe('ab');
   });
 });
+
+describe('answer still being written when the user clicks (real gpt-6-pro task, 2026-10)', () => {
+  /** The fixture conversation plus a new request whose answer so far holds only thinking. */
+  function inProgress(status: string) {
+    const data = chatgptConversation() as { mapping: Record<string, { children: string[] }>; current_node: string };
+    data.mapping.a2.children = ['u3'];
+    data.mapping.u3 = { id: 'u3', parent: 'a2', children: ['a3'], message: { id: 'u3', author: { role: 'user' }, create_time: 1_790_000_100, content: { content_type: 'text', parts: ['보고서 전체를 다시 정리해 줘.'] } } } as never;
+    data.mapping.a3 = { id: 'a3', parent: 'u3', children: [], message: { id: 'a3', author: { role: 'assistant' }, create_time: 1_790_000_110, status, content: { content_type: 'thoughts', thoughts: [{ summary: '계획', content: '목차부터 다시 정리한다.' }] } } } as never;
+    data.current_node = 'a3';
+    return parseChatGPTConversation(data, { conversationId: CHATGPT_ID, url: `https://chatgpt.com/c/${CHATGPT_ID}` });
+  }
+
+  it('warns that the last answer was still in progress', () => {
+    const conv = inProgress('in_progress');
+    expect(conv.extraction.warnings).toContain('answer-in-progress');
+    const checks = buildVerification(conv, 'handoff').checks;
+    expect(checks).toContainEqual({ code: 'answer.inProgress', status: 'warn' });
+  });
+
+  it('warns about a finished answer that has nothing visible', () => {
+    const checks = buildVerification(inProgress('finished_successfully'), 'md').checks;
+    expect(checks).toContainEqual({ code: 'answer.empty', status: 'warn' });
+    expect(buildVerification(parseChatGPTConversation(chatgptConversation(), { conversationId: CHATGPT_ID, url: '' }), 'md').checks.some((c) => c.code.startsWith('answer.'))).toBe(false);
+  });
+});

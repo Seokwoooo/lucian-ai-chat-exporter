@@ -1,6 +1,6 @@
 {
   "name": "lucian-ai-chat-exporter",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "private": true,
   "description": "Lucian AI Chat Exporter — one-click AI chat handoff and full-fidelity export for ChatGPT, Claude, Gemini and Grok.",
   "license": "MIT",
@@ -20,6 +20,7 @@
     "lab": "esbuild scripts/compression-lab/node-entry.ts --bundle --platform=node --format=esm --outfile=dist-lab/lab-node.mjs --log-level=error && node dist-lab/lab-node.mjs",
     "lab:browser": "node scripts/compression-lab/build-browser.mjs",
     "lab:file": "esbuild scripts/compression-lab/file-entry.ts --bundle --platform=node --format=esm --outfile=dist-lab/lab-file.mjs --log-level=error && node dist-lab/lab-file.mjs",
+    "check:real": "esbuild scripts/real-check/compare.ts --bundle --platform=node --format=esm --outfile=dist-lab/real-check.mjs --log-level=error && node dist-lab/real-check.mjs",
     "lab:qa": "esbuild scripts/compression-lab/qa/qa.ts --bundle --platform=node --format=esm --outfile=dist-lab/qa.mjs --log-level=error && node dist-lab/qa.mjs"
   },
   "engines": {

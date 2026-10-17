@@ -10,7 +10,7 @@ import { cleanUrl, estimateTokens, hangulRatio, hostLabel, urlKey } from '../sha
 import { messageBodyMarkdown, replaceOutsideCode } from '../export/markdown';
 import { clusterNearDuplicates, minhash } from './minhash';
 import { conceptsOf, greedyCoverage, type CoverItem } from './coverage';
-import { ANAPHOR_RE, CODE_ERROR_RE, F, REVERSAL_RE, bulletText, classify, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, nameImages, replacementPairs, stripTracking, topicTokens } from './patterns';
+import { ANAPHOR_RE, CODE_ERROR_RE, F, REVERSAL_RE, bulletText, classify, clipText, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, nameImages, replacementPairs, stripTracking, topicTokens } from './patterns';
 import { segmentMessage, type Unit } from './segment';
 import { renderHandoff, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
 
@@ -319,7 +319,7 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
 
   progress?.(0.85);
   const a: Analysis = { units, flags, score, rep, repeats, versions };
-  const ctx: BuildCtx = { sourceTokens, msgTokens, msgUnitStart, confirmedMsgs, lang, now, budgetTokens: opts.budgetTokens, selection: opts.selection ?? DEFAULT_SELECTION, layout: { ...DEFAULT_LAYOUT, ...opts.layout }, pastExtra: 0 };
+  const ctx: BuildCtx = { sourceTokens, msgTokens, msgUnitStart, confirmedMsgs, lang, now, budgetTokens: opts.budgetTokens, selection: opts.selection ?? DEFAULT_SELECTION, layout: { ...DEFAULT_LAYOUT, ...opts.layout }, pastExtra: 0, recentScale: 1 };
   let doc = buildDocument(conv, a, ctx);
   timings.scoreMs = clock() - t0;
 
@@ -337,6 +337,7 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
     let tokens = estimateTokens(markdown);
     let last = tokens;
     let extra = 0;
+    let keptExtra = 0;
     for (let pass = 0; pass < 2; pass++) {
       const diff = B - last;
       if (diff >= -B * 0.02 && diff <= B * 0.04) break;
@@ -350,7 +351,24 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
         doc = next;
         markdown = md2;
         tokens = last;
+        keptExtra = extra;
       }
+    }
+    // Still over: the fixed sections alone exceed the budget (seen on a real 2-message chat whose
+    // request was a 15k-token paste: there was no earlier context left to shrink). The verbatim
+    // transcript is then clipped harder; its cut-out middle stays out, as for any clipped message.
+    let scale = 1;
+    for (let pass = 0; pass < 3 && tokens > limit; pass++) {
+      const recentTok = doc.recent.reduce((s, r) => s + estimateTokens(r.body), 0);
+      if (recentTok < 200) break;
+      scale = Math.max(0.1, scale * (1 - (1.1 * (tokens - B)) / recentTok));
+      const next = buildDocument(conv, a, { ...ctx, pastExtra: keptExtra, recentScale: scale });
+      const md2 = renderHandoff(next);
+      const t2 = estimateTokens(md2);
+      if (t2 >= tokens) break;
+      doc = next;
+      markdown = md2;
+      tokens = t2;
     }
   }
   timings.renderMs = clock() - t0;
@@ -384,6 +402,8 @@ interface BuildCtx {
   layout: Layout;
   /** Extra tokens for earlier context (second pass, when the first one left budget unused). */
   pastExtra: number;
+  /** Shrinks the per-message transcript caps when the fixed sections alone exceed the budget. */
+  recentScale: number;
   sourceTokens: number;
   msgTokens: Float64Array;
   msgUnitStart: Int32Array;
@@ -424,7 +444,8 @@ const LEAD_CHARS = 220;
 
 function clipLine(text: string, max: number): { text: string; clipped: boolean } {
   const t = text.replace(/\s*\n\s*/g, ' ').trim();
-  return t.length > max ? { text: `${t.slice(0, max).trimEnd()}…`, clipped: true } : { text: t, clipped: false };
+  const c = clipText(t, max);
+  return { text: c, clipped: c !== t };
 }
 
 function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffDoc {
@@ -474,8 +495,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const share = (f: number) => (fullMode ? Infinity : capBudget * f * ctx.layout.listScale);
   // Transcript caps per message shrink with the budget (the cut-out middle stays selectable).
   const scaledCap = (cap: number, s: number, floor: number) => (s > 0 ? Math.round(Math.min(cap, Math.max(floor, capBudget * s))) : cap);
-  const lastMsgCap = scaledCap(ctx.layout.lastMsgCap, ctx.layout.lastMsgShare, 400);
-  const recentMsgCap = scaledCap(ctx.layout.recentMsgCap, ctx.layout.recentMsgShare, 250);
+  const lastMsgCap = Math.max(400, Math.round(scaledCap(ctx.layout.lastMsgCap, ctx.layout.lastMsgShare, 400) * ctx.recentScale));
+  const recentMsgCap = Math.max(250, Math.round(scaledCap(ctx.layout.recentMsgCap, ctx.layout.recentMsgShare, 250) * ctx.recentScale));
   const lineTokens = (text: string, max = 220) => estimateTokens(text.length > max ? text.slice(0, max) : text) + 8;
   /** Keeps the highest-priority indices (given in priority order) within maxTok; returns them in document order. */
   const fit = (byPriority: number[], maxTok: number, max = 220) => {
@@ -936,7 +957,9 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     if (u.kind !== 'code' || (u.lang && /^(sh|bash|zsh|shell|console|powershell|ps1|cmd|terminal)$/i.test(u.lang))) {
       for (const c of extractCommands(text)) cmdSet.set(c, u.m);
     }
-    for (const p of extractPaths(u.kind === 'code' ? text.slice(0, 2000) : text)) {
+    // Fetched web pages and search results mention other people's paths, not the user's files.
+    const webTool = u.kind === 'code' && /^tool:.*(?:web|fetch|search|brows)/i.test(u.title ?? '');
+    if (!webTool) for (const p of extractPaths(u.kind === 'code' ? text.slice(0, 2000) : text)) {
       const e = pathCount.get(p);
       pathCount.set(p, { n: (e?.n ?? 0) + 1, m: u.m });
     }
@@ -980,7 +1003,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     const limit = full ? Infinity : N - m <= 2 ? lastMsgCap : recentMsgCap;
     let clipped = false;
     if (estimateTokens(body) > limit) {
-      body = clipMarkdown(body, limit);
+      body = clipMarkdown(body, limit, ctx.lang);
       clipped = true;
     }
     recent.push({ m, role: msg.role, model: msg.model, time: msg.created_at, body, clipped });
@@ -1022,7 +1045,8 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       }
       const lines = u.text.split('\n');
       const truncated = lines.length > 220;
-      const body = truncated ? [...lines.slice(0, 170), `… (${lines.length - 200} lines omitted — see [#m${u.m + 1}])`, ...lines.slice(-30)].join('\n') : u.text;
+      const note = ctx.lang === 'ko' ? `… (${lines.length - 200}줄 생략 — 전체는 [#m${u.m + 1}])` : `… (${lines.length - 200} lines omitted — see [#m${u.m + 1}])`;
+      const body = truncated ? [...lines.slice(0, 170), note, ...lines.slice(-30)].join('\n') : u.text;
       const tok = estimateTokens(body);
       if (usedTok + tok > codeBudget) continue;
       usedTok += tok;
@@ -1180,6 +1204,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     lastUser,
     lastAssistant,
     lastAssistantKey,
+    lastAssistantEmpty: lastAssistant >= 0 && !conv.messages[lastAssistant].contents.some((c) => c.type !== 'thinking' && c.type !== 'sources' && c.type !== 'tool' && (c.content?.trim() || c.imageUrl || c.imageGroup?.images.length || c.attachment)),
     files,
     commands,
     links,
@@ -1199,7 +1224,7 @@ function sameRule(a: string[], b: string[]): boolean {
 }
 
 /** Keeps the head and tail of a long Markdown body and keeps code fences balanced. */
-export function clipMarkdown(body: string, maxTokens: number): string {
+export function clipMarkdown(body: string, maxTokens: number, lang: 'ko' | 'en' = 'en'): string {
   const lines = body.split('\n');
   const tokens = lines.map((l) => estimateTokens(l) + 1);
   const headBudget = maxTokens * 0.6;
@@ -1218,7 +1243,7 @@ export function clipMarkdown(body: string, maxTokens: number): string {
   const omittedTokens = Math.round(omitted.reduce((s, l) => s + estimateTokens(l), 0));
   const out = [...head];
   if (fenceCount(head) % 2 === 1) out.push('```');
-  out.push('', `… [omitted ~${omittedTokens} tokens] …`, '');
+  out.push('', lang === 'ko' ? `… [약 ${omittedTokens.toLocaleString('en-US')}토큰 생략] …` : `… [omitted ~${omittedTokens} tokens] …`, '');
   if ((fenceCount(head) + fenceCount(omitted)) % 2 === 1) out.push('```');
   out.push(...tail);
   return out.join('\n');

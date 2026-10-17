@@ -119,14 +119,24 @@ export function classify(text: string, role: 'user' | 'assistant'): number {
 
 // ---------- entities ----------
 
-const PATH_RE =
-  /(?:~|\.{1,2}|[A-Za-z]:)?(?:[\\/][\w.@+-]+){2,}\/?|(?<![\w.-])[\w-]+(?:\/[\w.@-]+)+\.[A-Za-z0-9]{1,6}\b(?!\.[A-Za-z0-9])|\b[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|ps1|sql|md|mdx|json|jsonc|yml|yaml|toml|ini|env|lock|html|css|scss|vue|svelte|xml|csv|txt|pdf|docx|hwpx|ipynb|gradle|tf|dockerfile)\b(?!\.[A-Za-z0-9])/gi;
+// Path segments may contain any letter (Korean file names). A path must not start right after a
+// letter: ChatGPT's `sandbox:/mnt/data/…` is not `x:/mnt/data/…`, and "빨강/파랑/초록" is a list.
+const SEG = String.raw`[\p{L}\p{N}_.@+-]`;
+const PATH_RE = new RegExp(
+  String.raw`(?<![\p{L}\p{N}_])(?:~|\.{1,2}|[A-Za-z]:)?(?:[\\/]${SEG}+){2,}\/?` +
+    String.raw`|(?<![\p{L}\p{N}_.-])[\p{L}\p{N}_-]+(?:\/${SEG}+)+\.[A-Za-z0-9]{1,6}\b(?!\.[A-Za-z0-9])` +
+    String.raw`|(?<![\p{L}\p{N}_.-])[\p{L}\p{N}_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp|cs|php|sh|zsh|ps1|sql|md|mdx|json|jsonc|yml|yaml|toml|ini|env|lock|html|css|scss|vue|svelte|xml|csv|txt|pdf|docx|hwpx|ipynb|gradle|tf|dockerfile)\b(?!\.[A-Za-z0-9])`,
+  'giu',
+);
 const URL_RE = /https?:\/\/[^\s<>()"'`\]]+[^\s<>()"'`\].,;:!?]/g;
 const CMD_RE = /^(?:\$\s+|>\s+)?((?:npm|npx|pnpm|yarn|bun|node|deno|git|gh|pip3?|python3?|uv|poetry|docker|docker-compose|kubectl|curl|wget|brew|apt(?:-get)?|cargo|go|make|cmake|java|mvn|gradle|dotnet|terraform|aws|gcloud|firebase|vercel|supabase|psql|mysql|redis-cli|chmod|mkdir|cd|ls|cp|mv|rm|export|source)\s[^\n]{1,200})$/gm;
 
 export function extractPaths(text: string): string[] {
   const out = new Set<string>();
-  for (const m of text.replace(URL_RE, ' ').matchAll(PATH_RE)) {
+  // Link targets are web addresses (`[Skills](/docs/en/skills)` in a fetched page), except the
+  // files ChatGPT made (`[report](sandbox:/mnt/data/report.pdf)`).
+  const plain = text.replace(/\]\((?!sandbox:|file:)[^)\s]*\)/g, ']').replace(URL_RE, ' ');
+  for (const m of plain.matchAll(PATH_RE)) {
     const p = m[0].replace(/[.,;:)]+$/, '');
     if (p.length < 4 || /^https?:/i.test(p) || /^\/\//.test(p)) continue;
     if (/^\d+(\.\d+)+$/.test(p)) continue; // version numbers
@@ -164,6 +174,26 @@ function imageName(url: string): string | undefined {
     // relative paths have no useful name
   }
   return undefined;
+}
+
+/**
+ * Cuts a line to about `max` characters without ending inside a Markdown link or a URL (a cut
+ * link renders as raw "[text](https://…" text): the cut moves past a link that ends soon, or
+ * before it.
+ */
+export function clipText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = max;
+  for (const m of text.matchAll(/!?\[[^\]\n]*\]\([^)\s]*\)|https?:\/\/[^\s<>()"'`\]]+/g)) {
+    const s = m.index ?? 0;
+    const e = s + m[0].length;
+    if (s >= cut) break;
+    if (e > cut) {
+      cut = e - cut <= 60 || s < max / 2 ? e : s;
+      break;
+    }
+  }
+  return cut >= text.length ? text : `${text.slice(0, cut).trimEnd()}…`;
 }
 
 export function extractUrls(text: string): string[] {

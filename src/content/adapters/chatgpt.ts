@@ -613,7 +613,8 @@ export function parseChatGPTConversation(data: Json, opts: ParseOptions): Conver
       sourceNodeCount: main.visible,
       missingNodeIds: main.missing,
       skipped: main.skipped,
-      warnings: [],
+      // Clicked while the answer was still being written (seen on a real gpt-6-pro task, 2026-10).
+      warnings: mapping[leafId]?.message?.status === 'in_progress' ? ['answer-in-progress'] : [],
       fetchedAt: Date.now(),
     },
   };

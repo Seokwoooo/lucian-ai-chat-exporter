@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handoffBudget, runHandoff } from '../../src/handoff/engine';
-import { ANAPHOR_RE, extractPaths } from '../../src/handoff/patterns';
+import { ANAPHOR_RE, clipText, extractPaths } from '../../src/handoff/patterns';
 import { verifyHandoffMarkdown } from '../../src/handoff/render';
 import { conv as makeConv, englishScenario, koreanScenario, msg, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
 import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
@@ -252,7 +252,7 @@ describe('handoff — very long messages (real-data shape, 2026-10)', () => {
 
   it('keeps excerpts from the middle of a clipped message, within the budget', () => {
     expect(r.stats.mode).toBe('compressed');
-    expect(md).toMatch(/\[omitted ~\d+ tokens\]/);
+    expect(md).toMatch(/\[약 [\d,]+토큰 생략\]/); // localized since v1.3.3 (was English in Korean documents)
     const excerpts = section(md, '중요한 맥락');
     expect(excerpts).toMatch(/\[#m2\]/);
     // A paragraph from the middle of the 600-paragraph report survives as a verbatim excerpt.
@@ -371,5 +371,51 @@ describe('files and images from a real ChatGPT handoff (v1.3.2)', () => {
     expect(md).toContain('[이미지: IMG_0001.jpeg]');
     expect(md).toContain('[이미지: label.png]');
     expect(md).not.toMatch(/estuary|sig=|token=secret/);
+  });
+});
+
+describe('handoff details found by comparing real handoffs with full exports (v1.3.3)', () => {
+  it('reads sandbox links and Korean file names as whole paths', () => {
+    const text = '[결과 PDF](sandbox:/mnt/data/out/회의록_요약.pdf) 와 sandbox:/mnt/data/report_v2.md 를 만들었습니다. C:/Users/dev/app.ts 도 봤어요.';
+    expect(extractPaths(text)).toEqual(['/mnt/data/out/회의록_요약.pdf', '/mnt/data/report_v2.md', 'C:/Users/dev/app.ts']);
+  });
+
+  it('does not take slash-separated Korean words for paths', () => {
+    expect(extractPaths('색은 빨강/파랑/초록 중에 고르고, 설계/구현/검토 순서로 정리했어요. 결과는 ~/notes/색_정리.md 에 있어요.')).toEqual(['~/notes/색_정리.md']);
+  });
+
+  it('does not take web links in fetched pages for files', () => {
+    expect(extractPaths('[Skills](/docs/en/skills#pass-arguments) are the exception. See [setup](./setup) and `src/index.ts`.')).toEqual(['src/index.ts']);
+  });
+
+  it('never ends a clipped line inside a Markdown link', () => {
+    const long = `${'가'.repeat(200)} 이 판단은 [**Example Model 1.0**](https://example.com/models/example-model-1.0-flash) 모델로 할 거야. ${'나'.repeat(100)}`;
+    for (const max of [205, 230, 240, 260]) {
+      const out = clipText(long, max);
+      expect(out, `max ${max}`).not.toMatch(/\]\([^)]*$/);
+      expect(out.endsWith('…')).toBe(true);
+    }
+  });
+
+  it('keeps a long last request short in "current state" when the transcript below has it', () => {
+    const paste = Array.from({ length: 400 }, (_, i) => `규칙 ${i + 1}: 원고는 존댓말로 쓰고 출처를 반드시 확인합니다. 항목 번호 ${i + 1}을 지킵니다.`).join('\n');
+    const c = makeConv([msg('user', paste), msg('assistant', `원고 두 편을 저장했습니다.\n\n${'확인한 내용입니다. '.repeat(300)}`)]);
+    const r = runHandoff(c, { now: 0 });
+    expect(r.stats.mode).toBe('compressed');
+    expect(estimateTokens(r.markdown)).toBeLessThanOrEqual(handoffBudget(r.stats.sourceTokens) * 1.02);
+    const current = section(r.markdown, '현재 진행 상황');
+    expect(current.length).toBeLessThan(2_500);
+    expect(current).toContain('이어지는 내용은 아래 대화 원문');
+  });
+});
+
+describe('last answer with nothing visible yet (v1.3.3)', () => {
+  it('tells the next AI to start from the last request instead of showing an empty answer', () => {
+    const answer = msg('assistant', '');
+    answer.contents = [{ type: 'thinking', content: '목차부터 다시 정리한다.' }];
+    const md = runHandoff(makeConv([msg('user', '보고서를 정리해 주세요.'), msg('assistant', '정리했습니다.'), msg('user', '보고서 전체를 다시 정리해 주세요.'), answer]), { now: 0 }).markdown;
+    expect(section(md, '현재 진행 상황')).toMatch(/마지막 AI 응답 \[#m4\]에는 보이는 내용이 없습니다/);
+    expect(md).toContain('_(보이는 내용 없음)_');
+    expect(md).not.toContain('_(empty)_');
   });
 });

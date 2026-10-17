@@ -10,7 +10,7 @@ import { strFromU8, unzipSync } from 'fflate';
 import puppeteer, { type Browser, type CDPSession, type Page, type Target } from 'puppeteer-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { JobState } from '../../src/shared/types';
-import { PAGES, calls, route } from './mock-sites';
+import { PAGES, calls, failApi, hiddenEarlierConversation, route } from './mock-sites';
 
 const DIST = resolve('dist');
 // Files are named "<site>-export.<ext>": "claude.md" would collide with CLAUDE.md on
@@ -289,6 +289,42 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       await page.close();
     }
   }, 120_000);
+
+  // Real-site state found in 2026-10 (v1.3.2): after in-app navigation the earlier conversation
+  // stays in the page, hidden. It must not be counted ("the page shows more user messages") nor
+  // read when the API fails and the extension reads the page instead.
+  it('in-app navigation: a hidden earlier conversation is neither counted nor read (all sites)', async () => {
+    for (const site of ['chatgpt', 'claude', 'gemini', 'grok'] as const) {
+      const page = await browser.newPage();
+      await page.goto(PAGES[site], { waitUntil: 'load' });
+      await page.evaluate((markup) => document.body.insertAdjacentHTML('afterbegin', markup), hiddenEarlierConversation(site));
+      await new Promise((r) => setTimeout(r, 300));
+      const tabId = await tabIdFor(PAGES[site]);
+      await popup.bringToFront();
+      await popup.goto(`chrome-extension://${extId}/popup.html?tabId=${tabId}`, { waitUntil: 'load' });
+      await popup.waitForSelector('#handoffBtn:not([disabled])');
+
+      const viaApi = await runAndWait(tabId, '#handoffBtn');
+      expect(viaApi.job.phase, `${site}: ${JSON.stringify(viaApi.job.error)}`).toBe('done');
+      const apiChecks = viaApi.job.result?.verification.checks ?? [];
+      expect(apiChecks.find((c) => c.code === 'dom.more'), `${site}: ${JSON.stringify(apiChecks)}`).toBeUndefined();
+
+      failApi.add(site);
+      try {
+        const viaPage = await runAndWait(tabId, '#handoffBtn', 90_000);
+        expect(viaPage.job.phase, `${site}: ${JSON.stringify(viaPage.job.error)}`).toBe('done');
+        const checks = viaPage.job.result?.verification.checks ?? [];
+        expect(checks.some((c) => c.code === 'method.dom'), `${site}: ${JSON.stringify(checks)}`).toBe(true);
+        expect(checks.find((c) => c.code === 'dom.more'), site).toBeUndefined();
+        const md = readFileSync(newestDownload('md', viaPage.job.startedAt), 'utf8');
+        expect(md, site).not.toContain('이전 대화');
+        report.push({ site, kind: 'hidden-earlier-conversation', apiMs: viaApi.ms, domFallbackMs: viaPage.ms, messages: viaPage.job.result?.handoffStats?.messages });
+      } finally {
+        failApi.delete(site);
+      }
+      await page.close();
+    }
+  }, 300_000);
 
   for (const site of ['chatgpt', 'claude', 'gemini', 'grok'] as const) {
     it(`${site}: handoff and every export format`, async () => {

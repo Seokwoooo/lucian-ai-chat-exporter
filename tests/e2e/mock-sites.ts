@@ -66,10 +66,36 @@ const ACTIONS_CHATGPT =
 /** Records which endpoints the extension called, for assertions. */
 export const calls: string[] = [];
 
+/** Sites whose conversation API answers 500, so the extension falls back to reading the page. */
+export const failApi = new Set<string>();
+const API_PATHS: Record<string, RegExp> = {
+  'chatgpt.com': /^\/backend-api\/conversation\//,
+  'claude.ai': /^\/api\/organizations\/[^/]+\/chat_conversations\//,
+  'gemini.google.com': /^\/_\/BardChatUi\/data\/batchexecute/,
+  'grok.com': /^\/rest\/app-chat\//,
+};
+const SITE_OF_HOST: Record<string, string> = { 'chatgpt.com': 'chatgpt', 'claude.ai': 'claude', 'gemini.google.com': 'gemini', 'grok.com': 'grok' };
+
+/**
+ * An earlier conversation as single-page sites keep it after in-app navigation: still mounted, but
+ * inside a `display: none` container (seen on chatgpt.com, 2026-10). Text is synthetic.
+ */
+export function hiddenEarlierConversation(site: 'chatgpt' | 'claude' | 'gemini' | 'grok'): string {
+  const turn = (n: number) =>
+    ({
+      chatgpt: `<div data-message-author-role="user"><div data-user-message-bubble="true"><div class="whitespace-pre-wrap">이전 대화 질문 ${n}</div></div></div><div data-message-author-role="assistant"><div class="markdown"><p>이전 대화 답변 ${n}</p></div></div>`,
+      claude: `<div data-testid="user-message">이전 대화 질문 ${n}</div><div data-testid="assistant-message"><div class="font-claude-response">이전 대화 답변 ${n}</div></div>`,
+      gemini: `<user-query>이전 대화 질문 ${n}</user-query><model-response>이전 대화 답변 ${n}</model-response>`,
+      grok: `<div class="items-end"><div class="message-bubble">이전 대화 질문 ${n}</div></div><div class="items-start"><div class="message-bubble">이전 대화 답변 ${n}</div></div>`,
+    })[site];
+  return `<div style="display: none" data-e2e-earlier>${[1, 2, 3].map(turn).join('')}</div>`;
+}
+
 export function route(req: MockRequest): MockResponse | null {
   const u = new URL(req.url);
   const key = `${req.method} ${u.host}${u.pathname}`;
   calls.push(key);
+  if (failApi.has(SITE_OF_HOST[u.host]) && API_PATHS[u.host]?.test(u.pathname)) return json({ error: 'e2e: API down' }, 500);
 
   // ---------- ChatGPT ----------
   if (u.host === 'chatgpt.com') {
