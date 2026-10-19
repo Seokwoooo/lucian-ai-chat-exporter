@@ -8,11 +8,13 @@ import { checkText } from '../export/report';
 import { detectLocale, formatBytes, t, type Locale, type MessageKey } from '../shared/i18n';
 import type { ExportFormat, JobKind, JobState, MdImageMode } from '../shared/types';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
+import { FORMAT_LOGOS, IMAGE_ICON, MD_CHOICE_CSS, mdChoiceDarkCss, mdChoiceHtml } from '../shared/ui-icons';
 import type { SiteAdapter } from './adapters/types';
 
 const HOST_ATTR = 'data-lucian-action';
-const PRIMARY: ExportFormat[] = ['pdf', 'md', 'docx'];
-const MORE: ExportFormat[] = ['hwpx', 'html', 'txt', 'json', 'zip'];
+// Same order as the popup (v1.3.7): Markdown first, Word under "more formats".
+const PRIMARY: ExportFormat[] = ['md', 'pdf', 'txt'];
+const MORE: ExportFormat[] = ['docx', 'hwpx', 'html', 'json', 'zip'];
 // 'choose': a Markdown export of a chat with images waits for the user's choice (v1.3.6).
 const TERMINAL = ['done', 'error', 'print', 'choose'];
 
@@ -26,6 +28,7 @@ const ICON = {
   err: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="m8.5 8.5 7 7m0-7-7 7" stroke="var(--bg)" stroke-width="2.4" stroke-linecap="round"/></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  image: IMAGE_ICON,
 };
 
 // Toolbar button: the site's own icons are flat, so Lucian's is marked by a soft neon ring
@@ -94,7 +97,10 @@ button:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
 .primary { width: 100%; padding: 8px 10px; border: 0; border-radius: 9px; background: var(--primary); color: var(--primary-ink); font-weight: 600; }
 .primary:hover { opacity: .9; }
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.fmt { padding: 7px 4px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); font-size: 12px; font-weight: 550; text-align: center; }
+.fmt { display: inline-flex; align-items: center; justify-content: center; min-width: 0; padding: 7px 4px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); font-size: 12px; font-weight: 550; text-align: center; }
+/* Main formats: the format's logo above its name (a row would wrap "Markdown" at this width). */
+.fmt:has(.fmt-logo) { flex-direction: column; gap: 4px; padding: 9px 4px 7px; }
+.fmt .fmt-logo { width: 22px; height: 22px; flex: none; color: var(--text); }
 .fmt:hover { background: var(--surface-hover); }
 .more { all: unset; display: inline-flex; align-items: center; gap: 2px; margin-top: 8px; color: var(--muted); font-size: 12px; cursor: pointer; border-radius: 6px; }
 .more:hover { color: var(--text); }
@@ -114,11 +120,9 @@ button:disabled { opacity: .45; cursor: default; }
 .status ul { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
 .status .actions { margin-top: 6px; display: flex; gap: 6px; }
 .status .choices { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-.choice { all: unset; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
-.choice b { font-size: 12.5px; font-weight: 650; color: var(--text); }
-.choice span { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
-.choice:hover { background: var(--surface-hover); }
-.choice:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.status[data-level="choose"] .ic { color: var(--text); }
+${MD_CHOICE_CSS}
+${mdChoiceDarkCss('.panel.dark')}
 .status .bar { margin-top: 7px; height: 4px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; }
 .status .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7c5cff, #22d3ee); transition: width .25s ease; }
 .link { all: unset; color: var(--text); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
@@ -183,8 +187,9 @@ export function initPageUi(adapter: SiteAdapter): void {
     document.documentElement.appendChild(panelHost);
   };
 
-  const fmtButton = (f: ExportFormat) =>
-    `<button type="button" class="fmt" data-format="${f}">${escapeText(tr(`format.${f}` as MessageKey))}</button>`;
+  // Logos only in the main row; the extra formats stay one-line text buttons.
+  const fmtButton = (f: ExportFormat, logo = false) =>
+    `<button type="button" class="fmt" data-format="${f}">${logo ? (FORMAT_LOGOS[f] ?? '') : ''}<span>${escapeText(tr(`format.${f}` as MessageKey))}</span></button>`;
 
   const renderPanel = () => {
     if (!panel) return;
@@ -199,9 +204,9 @@ export function initPageUi(adapter: SiteAdapter): void {
       <section class="card">
         <h3>${escapeText(tr('export.title'))}</h3>
         <p>${escapeText(tr('export.desc'))}</p>
-        <div class="grid">${PRIMARY.map(fmtButton).join('')}</div>
+        <div class="grid">${PRIMARY.map((f) => fmtButton(f, true)).join('')}</div>
         <button type="button" class="more" data-act="more" aria-expanded="${moreOpen}">${escapeText(tr(moreOpen ? 'export.less' : 'export.more'))} ${ICON.chevron}</button>
-        <div class="grid extra" ${moreOpen ? '' : 'hidden'}>${MORE.map(fmtButton).join('')}</div>
+        <div class="grid extra" ${moreOpen ? '' : 'hidden'}>${MORE.map((f) => fmtButton(f)).join('')}</div>
       </section>
       <div class="status" role="status" aria-live="polite" hidden></div>`;
     updatePanel();
@@ -253,13 +258,14 @@ export function initPageUi(adapter: SiteAdapter): void {
       }
     } else if (job.phase === 'choose') {
       // A Markdown file cannot hold images: the user picks ZIP, a folder next to it, or none.
-      box.dataset.level = 'warning';
-      icon = ICON.warn;
-      iconKind = 'warn';
-      title = tr('choose.md.title');
-      sub = tr('choose.md.desc', { n: job.choice?.images ?? 0 });
+      // A question, not a problem: a neutral picture icon instead of a warning.
+      box.dataset.level = 'choose';
+      icon = ICON.image;
+      iconKind = 'image';
+      title = tr('choose.md.title', { n: job.choice?.images ?? 0 });
+      sub = tr('choose.md.desc');
       extra += `<div class="choices" role="group">${(['zip', 'folder', 'none'] as const)
-        .map((m) => `<button type="button" class="choice" data-md="${m}"><b>${escapeText(tr(`choose.md.${m}` as MessageKey))}</b><span>${escapeText(tr(`choose.md.${m}Desc` as MessageKey))}</span></button>`)
+        .map((m) => `<button type="button" class="choice" data-md="${m}">${mdChoiceHtml(m, tr(`choose.md.${m}`), tr(`choose.md.${m}Desc`), m === 'zip' ? tr('choose.md.recommended') : undefined)}</button>`)
         .join('')}</div>`;
     } else if (job.phase === 'error') {
       box.dataset.level = 'error';
@@ -308,6 +314,11 @@ export function initPageUi(adapter: SiteAdapter): void {
     if (body.dataset.html !== html) {
       body.dataset.html = html;
       body.innerHTML = html;
+    }
+    // The choice sits at the bottom of a tall panel: bring it into view once per job.
+    if (job.phase === 'choose' && box.dataset.shown !== job.id) {
+      box.dataset.shown = job.id;
+      requestAnimationFrame(() => box.scrollIntoView({ block: 'nearest' }));
     }
     const bar = body.querySelector<HTMLElement>('.bar');
     if (bar && pct != null) {

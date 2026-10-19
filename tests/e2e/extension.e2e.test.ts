@@ -164,7 +164,7 @@ async function openPopupFor(site: keyof typeof PAGES): Promise<number> {
 
 async function runAndWait(tabId: number, selector: string, timeoutMs = 60_000): Promise<{ job: JobState; ms: number }> {
   const t0 = Date.now();
-  if (selector.includes('data-format') && !(await popup.$eval('#moreFormats', (el) => !(el as HTMLElement).hidden)) && /hwpx|html|txt|json|zip/.test(selector)) {
+  if (selector.includes('data-format') && !(await popup.$eval('#moreFormats', (el) => !(el as HTMLElement).hidden)) && /docx|hwpx|html|json|zip/.test(selector)) {
     await popup.click('#moreBtn');
   }
   await popup.click(selector);

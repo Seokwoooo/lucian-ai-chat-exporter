@@ -1,6 +1,6 @@
 # Chrome 웹 스토어 등록 정보 (초안)
 
-업로드 파일: `release/lucian-ai-chat-exporter-v1.3.6.zip` (`npm run package`로 생성, SHA-256은 같은 폴더의 `.sha256` 파일)
+업로드 파일: `release/lucian-ai-chat-exporter-v1.3.7.zip` (`npm run package`로 생성, SHA-256은 같은 폴더의 `.sha256` 파일)
 
 ## 기본 정보
 
@@ -26,7 +26,7 @@ AI와 오래 작업한 대화를 다른 AI로 옮기거나, 문서로 보관해�
 • 100만 토큰 분량의 대화도 1초 안에 처리합니다.
 
 ■ 전체 대화 내보내기
-PDF, Markdown, Word(.docx)를 바로 고를 수 있습니다. “다른 형식 더 보기”를 누르면 한글(HWPX), HTML, TXT, JSON, ZIP 전체 백업도 나옵니다.
+Markdown, PDF, TXT를 바로 고를 수 있습니다. “다른 형식 더 보기”를 누르면 Word(.docx), 한글(HWPX), HTML, JSON, ZIP 전체 백업도 나옵니다.
 • 코드, 표, 수식, 이미지, 첨부파일 정보를 보존합니다.
 • 내보낼 때마다 메시지 수, 이미지, 첨부 저장 여부, 파일 무결성을 검사하고, 빠진 것이 있으면 숨기지 않고 알려 줍니다.
 
@@ -44,7 +44,7 @@ Move a long AI conversation to another AI, or keep it as a proper document. Two 
 
 ■ Handoff to another AI — one click saves a handoff Markdown file with the goal, latest confirmed decisions, constraints, completed work, current state, open issues, next steps and key code. It is extractive: lines are quoted from the conversation with message references, and uncertain items are flagged. 1M-token conversations are processed in about a second.
 
-■ Full export — PDF, Markdown and Word, plus HWPX, HTML, TXT, JSON and a ZIP backup under “More formats”. Code, tables, math, images and attachment info are preserved, and every export is verified (message counts, images, attachments, file integrity), with any gaps reported.
+■ Full export — Markdown, PDF and TXT, plus Word, HWPX, HTML, JSON and a ZIP backup under “More formats”. Code, tables, math, images and attachment info are preserved, and every export is verified (message counts, images, attachments, file integrity), with any gaps reported.
 
 ■ Privacy — runs entirely in your browser. No servers, AI APIs, analytics, accounts or settings. Credentials and tokens are never stored.
 
@@ -73,15 +73,14 @@ Supported: chatgpt.com, claude.ai, gemini.google.com, grok.com.
 - 판매하지 않음 / 목적 외 사용 없음 / 신용 평가 등에 사용하지 않음: 모두 해당
 - 인증 정보, 개인 통신, 위치, 웹 기록, 사용자 활동 데이터: 수집하지 않음
 
-## 스크린샷 (1280×800 권장)
+## 그래픽 애셋
 
-`docs/images/`의 팝업 캡처(360px 폭, 2배율)를 1280×800 캔버스 가운데에 놓아 만듭니다.
-1. `popup-handoff-done.png` — 인수인계 완료와 단계별 소요 시간
-2. `popup-dark.png` — 다른 형식 펼침, 다크 모드
-3. `popup-export-done.png` — 내보내기 검증 결과
-4. `print-preview.png` — PDF 인쇄 미리보기(한글, 표, 코드)
-5. `popup-unsupported.png` — 지원하지 않는 페이지 안내
+`store-assets/`에 있습니다 (`npm run store-assets`로 다시 생성, 올리는 위치와 규격은 `store-assets/README.md`).
+
+- 스크린샷 1280×800 5장: 한국어 `store-assets/ko/`, 영어 `store-assets/en/` (스토어에서 언어별로 등록)
+- 작은 프로모션 타일 440×280(필수), 마키 1400×560(선택): 언어별 등록이 안 되므로 한 언어만 올림
+- 스토어 아이콘: `store-assets/icon/store-icon-128.png` (패키지의 `icon-128.png`와 같은 파일)
 
 ## 아이콘
 
-`src/static/icons/icon-128.png` (스토어 아이콘), 원본 `icon-512.png`
+`scripts/make-icons.py`가 만듭니다. 16/32/48은 캔버스를 채우고, `icon-128.png`는 웹스토어 규격대로 96×96 그림에 사방 16px 투명 여백과 옅은 밝은 테두리 빛을 둡니다(설치 창·확장 관리 화면·스토어 아이콘). 원본 `icon-512.png`

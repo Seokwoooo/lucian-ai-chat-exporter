@@ -30,6 +30,7 @@ npm run lab:qa -- presence [ratios] [algos]  # QA evaluation on synthetic chats:
 npm run check:real -- <folder>  # real handoffs vs JSON exports of the same chats (folder outside the repo; see docs/test-report.md §8)
 npm run package      # build + release/lucian-ai-chat-exporter-v<version>.zip
 npm run check        # typecheck + lint + test + build
+npm run store-assets # Chrome Web Store images (en/ko) from the real UI → store-assets/ (needs Chrome for Testing)
 ```
 
 E2E needs Chrome for Testing (branded Chrome ≥137 ignores `--load-extension`):
@@ -60,6 +61,9 @@ popup            src/popup/*                two cards: handoff button, export fo
   percents (`offscreen-progress`), shown as "처리 중… (n% 완료)" in the popup and the page panel.
   Updates change only the text and the bar: the spinner element is created once per job (a new
   element restarts its rotation — the E2E 1M test counts this).
+- `src/shared/ui-icons.ts` holds the export buttons' format logos (main row Markdown · PDF · TXT; Word,
+  HWPX, HTML, JSON, ZIP under "more formats", v1.3.7) and the Markdown image-choice icons, shared by
+  the popup and the page panel. PDF/Word marks only name the format (Adobe/Microsoft trademarks).
 - `src/shared/handoff-visual.ts` draws the "this AI → other AI" illustration above the handoff
   button (popup + page panel). Logos live in `src/static/providers/` (web-accessible on the five
   AI origins only); they are trademarks used only to name the services.

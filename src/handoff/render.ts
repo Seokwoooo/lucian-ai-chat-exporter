@@ -3,6 +3,7 @@
 // open work, next steps, failed attempts, code/files, links, past context, transcript,
 // references. Sections with nothing to show are left out and the rest are numbered in order.
 
+import { fillTemplate } from '../shared/i18n';
 import type { Conversation, Role } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 import { clipText } from './patterns';
@@ -221,16 +222,16 @@ const L = {
     goal: 'Goal and request flow',
     goalFirst: 'Initial request',
     requests: 'Later requests ({n}, in order)',
-    requestsOmitted: '… {n} less important requests in between are omitted',
+    requestsOmitted: '… {n} less important {n:request|requests} in between {n:is|are} omitted',
     leadPrefix: '→ answer in short:',
-    similar: '({n} similar requests)',
+    similar: '({n} similar {n:request|requests})',
     decisions: 'Confirmed decisions (latest first priority)',
     supersededTitle: 'Earlier decisions that were changed or dropped',
     supersededNote: '→ changed in [#m{m}] (the latest decision above wins)',
     constraints: 'User instructions · constraints · prohibitions',
     constraintsSub: 'Constraints & prohibitions',
     requirementsSub: 'Requirements & instructions',
-    repeated: '(emphasized {n} times)',
+    repeated: '(emphasized {n} {n:time|times})',
     done: 'Completed work',
     current: 'Current state (last point of work)',
     lastUser: 'Last user request',
@@ -250,31 +251,31 @@ const L = {
     files: 'Files & paths',
     commands: 'Commands',
     latestCode: 'Latest code (earlier versions of the same code omitted)',
-    olderVersions: '{n} earlier versions omitted',
+    olderVersions: '{n} earlier {n:version|versions} omitted',
     codeInRecent: 'Code that is in the recent transcript is shown only there: {refs}',
     truncatedCode: 'partly omitted',
     links: 'Links & sources',
-    linksOmitted: '… {n} less referenced links omitted',
+    linksOmitted: '… {n} less referenced {n:link|links} omitted',
     attachments: 'Attachments (verbatim)',
-    attachTokens: '~{n} tokens',
+    attachTokens: '~{n} {n:token|tokens}',
     pasted: 'Pasted text',
     file: 'File',
     image: 'Image',
-    attachIn: '({n} attachments: {names} — see “Attachments”)',
-    attachInBelow: '({n} attachments: {names} — in the transcript below, {ref})',
+    attachIn: '({n} {n:attachment|attachments}: {names} — see “Attachments”)',
+    attachInBelow: '({n} {n:attachment|attachments}: {names} — in the transcript below, {ref})',
     attachBelow: '(its content is in the transcript below, {ref})',
     attachBare: 'Files and images without text',
     attachNoText: '(the conversation record has no text for these, so they are not included; ask the user to attach them again if needed)',
     attachOmitted: '(not included for lack of space; ask the user to attach it again if needed)',
     attachClipped: '(long — only its beginning and end are included; ask the user for the original if you need all of it)',
-    attachMore: '… {n} more attachments not listed',
+    attachMore: '… {n} more {n:attachment|attachments} not listed',
     past: 'Important context (verbatim excerpts)',
     recent: 'Recent conversation (verbatim)',
     transcript: 'Full conversation (verbatim)',
     clipped: '(long message — middle part omitted)',
     refs: 'Appendix. Message reference index',
     refsHead: '| Ref | Role | Time | First line |',
-    refsOmitted: '{n} older references omitted',
+    refsOmitted: '{n} older {n:reference|references} omitted',
     none: '_(nothing found)_',
     user: 'User',
     uncertain: {
@@ -288,7 +289,7 @@ const L = {
 };
 
 function fill(s: string, params: Record<string, string | number>): string {
-  return s.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? ''));
+  return fillTemplate(s, params, '');
 }
 
 function oneLine(text: string, max = 600): string {

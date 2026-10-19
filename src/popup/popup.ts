@@ -8,12 +8,14 @@ import { SITES, detectSite, extractConversationId } from '../shared/sites';
 import type { ExportFormat, JobKind, JobState, MdImageMode, VerificationCheck } from '../shared/types';
 import { checkText } from '../export/report';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
+import { FORMAT_LOGOS, IMAGE_ICON, MD_CHOICE_CSS, mdChoiceDarkCss, mdChoiceHtml } from '../shared/ui-icons';
 
 const locale: Locale = detectLocale(chrome.i18n?.getUILanguage?.() ?? navigator.language);
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const PRIMARY: ExportFormat[] = ['pdf', 'md', 'docx'];
-const MORE: ExportFormat[] = ['hwpx', 'html', 'txt', 'json', 'zip'];
+// v1.3.7: Markdown first and TXT in the main row; Word moved under "more formats".
+const PRIMARY: ExportFormat[] = ['md', 'pdf', 'txt'];
+const MORE: ExportFormat[] = ['docx', 'hwpx', 'html', 'json', 'zip'];
 const BADGE: Record<ExportFormat, string> = { pdf: 'PDF', md: 'MD', docx: 'W', hwpx: '한', html: '</>', txt: 'TXT', json: '{ }', zip: 'ZIP' };
 const MORE_KEY = 'lucian.moreFormats';
 
@@ -39,8 +41,8 @@ function formatButton(f: ExportFormat): HTMLButtonElement {
   b.className = 'fmt';
   b.dataset.format = f;
   const label = t(locale, `format.${f}` as MessageKey);
-  const hint = f === 'pdf' ? t(locale, 'format.hint.pdf') : f === 'zip' ? t(locale, 'format.hint.zip') : '';
-  b.innerHTML = `${fileIcon(BADGE[f])}<span class="fmt-label"></span>`;
+  const hint = f === 'pdf' || f === 'hwpx' || f === 'zip' ? t(locale, `format.hint.${f}`) : '';
+  b.innerHTML = `${FORMAT_LOGOS[f] ?? fileIcon(BADGE[f])}<span class="fmt-label"></span>`;
   b.querySelector('.fmt-label')!.textContent = label;
   b.setAttribute('aria-label', hint ? `${label} — ${hint}` : label);
   if (hint) b.title = hint;
@@ -54,6 +56,7 @@ const ICONS = {
   warn: '<svg viewBox="0 0 24 24"><path d="M12 2.5 22.5 21h-21z" fill="currentColor"/><path d="M12 9.5v5M12 17.6v.01" stroke="var(--bg)" stroke-width="2.4" stroke-linecap="round"/></svg>',
   err: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="m8.5 8.5 7 7m0-7-7 7" stroke="var(--bg)" stroke-width="2.4" stroke-linecap="round"/></svg>',
   print: '<svg viewBox="0 0 24 24"><path d="M7 9V3h10v6M7 17H4v-7h16v7h-3M7 14h10v7H7z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+  image: IMAGE_ICON,
 };
 
 function setEnabled(on: boolean): void {
@@ -107,8 +110,14 @@ async function init(): Promise<void> {
     if (current) start(current.kind, current.format, current.mdImages);
   });
   // Markdown export of a chat with images: the user picks how to save them, then it runs again.
-  for (const b of document.querySelectorAll<HTMLButtonElement>('#choices .choice')) {
-    b.addEventListener('click', () => start('export', 'md', b.dataset.md as MdImageMode));
+  for (const m of ['zip', 'folder', 'none'] as const) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'choice';
+    b.dataset.md = m;
+    b.innerHTML = mdChoiceHtml(m, t(locale, `choose.md.${m}`), t(locale, `choose.md.${m}Desc`), m === 'zip' ? t(locale, 'choose.md.recommended') : undefined);
+    b.addEventListener('click', () => start('export', 'md', m));
+    $('choices').appendChild(b);
   }
 
   // Resolve the tab: the active tab normally; ?tabId= is used by automated tests.
@@ -120,7 +129,7 @@ async function init(): Promise<void> {
   const url = tab?.url ?? '';
   const site = detectSite(url);
   const style = document.createElement('style');
-  style.textContent = HANDOFF_VISUAL_CSS;
+  style.textContent = `${HANDOFF_VISUAL_CSS}${MD_CHOICE_CSS}@media (prefers-color-scheme: dark) {${mdChoiceDarkCss()}}`;
   document.head.appendChild(style);
   $('handoffVisual').innerHTML = handoffVisualHtml(site, (s) => `providers/${s}.svg`, locale, 'auto');
   if (!site) {
@@ -253,10 +262,11 @@ function render(job: JobState | null): void {
 
   const running = !['done', 'error', 'print', 'choose'].includes(job.phase);
   if (job.phase === 'choose') {
-    box.dataset.level = 'warning';
-    setIcon(icon, 'warn');
-    text.textContent = t(locale, 'choose.md.title');
-    sub.textContent = t(locale, 'choose.md.desc', { n: job.choice?.images ?? 0 });
+    // A question, not a problem: neutral picture icon instead of a warning.
+    box.dataset.level = 'choose';
+    setIcon(icon, 'image');
+    text.textContent = t(locale, 'choose.md.title', { n: job.choice?.images ?? 0 });
+    sub.textContent = t(locale, 'choose.md.desc');
     // The status sits at the bottom of the popup: bring the question into view once.
     if (choices.dataset.for !== job.id) requestAnimationFrame(() => choices.scrollIntoView({ block: 'end', behavior: 'smooth' }));
     choices.dataset.for = job.id;

@@ -552,6 +552,14 @@ describe('attachments and pasted text (v1.3.5)', () => {
     expect(runHandoff(makeConv([noName, msg('assistant', '바꿨습니다.'), ...turns()]), { now: 0 }).markdown).not.toContain('첨부 자료');
   });
 
+  it('English counts agree with one attachment', () => {
+    const one = msg('user', 'Please review the attached memo and tell me what to change.');
+    one.contents.push({ type: 'attachment', attachment: { name: 'memo.txt', mime_type: 'text/plain', extractedText: 'Memo: lead with the conclusion, keep the evidence to three lines.' } });
+    const md = runHandoff(makeConv([one, msg('assistant', 'I reviewed the memo. Move the conclusion to the first line.')]), { now: 0 }).markdown;
+    expect(md).toContain('(1 attachment: memo.txt');
+    expect(md).not.toContain('1 attachments');
+  });
+
   it('only lists attachments when the whole conversation follows, and leaves them out with the v1.2 layout', () => {
     const short = runHandoff(makeConv([first, msg('assistant', '좋은 메모입니다.')]), { now: 0 });
     expect(short.stats.mode).toBe('full');

@@ -1,6 +1,7 @@
 // Single dictionary for every user-facing string (popup, exported documents, verification report).
 // Offscreen documents cannot use chrome.i18n, so localization is done in plain TypeScript.
 // Korean is the default; English is used when the browser UI language is not Korean.
+// English counts use `{n:singular|plural}` (see fillTemplate) so "1 table" never reads "1 tables".
 
 export type Locale = 'ko' | 'en';
 
@@ -25,6 +26,7 @@ const ko = {
   'format.json': 'JSON',
   'format.zip': 'ZIP 전체 백업',
   'format.hint.pdf': 'Chrome 인쇄 엔진으로 로컬 생성',
+  'format.hint.hwpx': '한글 문서 (OWPML)',
   'format.hint.zip': '대화·이미지·첨부·검증 보고서',
   'site.unsupported.title': '지원되지 않는 페이지입니다',
   'site.unsupported.desc': 'ChatGPT, Claude, Gemini, Grok의 대화 화면에서 열어 주세요.',
@@ -37,14 +39,15 @@ const ko = {
   'phase.processing.handoff': '맥락을 분석해 인수인계 문서를 만드는 중…',
   'phase.processing.export': '{format} 문서를 만드는 중…',
   'phase.downloading': '파일을 저장하는 중…',
-  'choose.md.title': 'Markdown 파일에는 이미지가 들어가지 않습니다',
-  'choose.md.desc': '이 대화에 이미지가 {n}개 있습니다. 이미지를 어떻게 할지 아래에서 골라 주세요.',
+  'choose.md.title': '이미지 {n}개를 어떻게 저장할까요?',
+  'choose.md.desc': 'Markdown 파일에는 이미지가 들어가지 않습니다.',
+  'choose.md.recommended': '추천',
   'choose.md.zip': 'ZIP으로 묶기',
-  'choose.md.zipDesc': '.md 파일과 images 폴더를 ZIP 하나로 저장합니다. 압축을 풀면 어디서나 이미지가 보입니다.',
+  'choose.md.zipDesc': '.md와 이미지를 파일 하나로',
   'choose.md.folder': '이미지 폴더 따로 저장',
-  'choose.md.folderDesc': '.md 옆에 「제목_files」 폴더를 만들어 이미지를 저장합니다. 이미지마다 다운로드가 하나씩 생깁니다.',
-  'choose.md.none': '이미지는 넣지 않기',
-  'choose.md.noneDesc': '.md만 저장하고, 이미지 자리에는 [이미지]만 남깁니다.',
+  'choose.md.folderDesc': '.md 옆 폴더에 이미지 저장',
+  'choose.md.none': '이미지 빼고 저장',
+  'choose.md.noneDesc': '.md만 저장 (자리에 [이미지] 표시)',
   'phase.print': '인쇄 창에서 대상을 "PDF로 저장"으로 선택해 저장하세요.',
   'phase.done.handoff': '인수인계 파일을 저장했습니다',
   'phase.done.export': '{format} 파일을 저장했습니다',
@@ -176,12 +179,13 @@ const en: Record<MessageKey, string> = {
   'format.pdf': 'PDF',
   'format.md': 'Markdown',
   'format.docx': 'Word',
-  'format.hwpx': 'Hangul (HWPX)',
+  'format.hwpx': 'HWPX',
   'format.html': 'HTML',
   'format.txt': 'TXT',
   'format.json': 'JSON',
-  'format.zip': 'ZIP full backup',
+  'format.zip': 'ZIP backup',
   'format.hint.pdf': 'Generated locally by Chrome’s print engine',
+  'format.hint.hwpx': 'Hangul word processor document (OWPML)',
   'format.hint.zip': 'Chat, images, attachments, report',
   'site.unsupported.title': 'This page is not supported',
   'site.unsupported.desc': 'Open a conversation on ChatGPT, Claude, Gemini or Grok.',
@@ -194,20 +198,21 @@ const en: Record<MessageKey, string> = {
   'phase.processing.handoff': 'Analyzing context and writing the handoff…',
   'phase.processing.export': 'Building the {format} document…',
   'phase.downloading': 'Saving the file…',
-  'choose.md.title': 'A Markdown file cannot hold images',
-  'choose.md.desc': 'This chat has {n} images. Choose what to do with them.',
+  'choose.md.title': 'What to do with {n:the image|the {n} images}?',
+  'choose.md.desc': 'Markdown files can’t hold images.',
+  'choose.md.recommended': 'Recommended',
   'choose.md.zip': 'Bundle as ZIP',
-  'choose.md.zipDesc': 'Saves the .md and an images folder in one ZIP. Unzipped, the images show anywhere.',
-  'choose.md.folder': 'Save an image folder',
-  'choose.md.folderDesc': 'Saves the images in a “title_files” folder next to the .md (one download per image).',
-  'choose.md.none': 'Leave images out',
-  'choose.md.noneDesc': 'Saves only the .md; each image becomes [Image].',
+  'choose.md.zipDesc': '.md and images in one file',
+  'choose.md.folder': 'Separate image folder',
+  'choose.md.folderDesc': 'Images in a folder next to the .md',
+  'choose.md.none': 'Text only',
+  'choose.md.noneDesc': 'Just the .md, images marked [Image]',
   'phase.print': 'In the print dialog, choose “Save as PDF” as the destination.',
   'phase.done.handoff': 'Handoff file saved',
   'phase.done.export': '{format} file saved',
   'phase.done.print': 'PDF print dialog opened',
   'phase.error': 'The task could not be completed',
-  'progress.messages': '{done} messages',
+  'progress.messages': '{done} {done:message|messages}',
   'progress.pages': 'page {done}',
   'progress.assets': '{done}/{total}',
   'progress.percent': '({n}% done)',
@@ -221,7 +226,7 @@ const en: Record<MessageKey, string> = {
   'timing.build': 'Build',
   'timing.save': 'Save',
   'timing.assets': 'Images',
-  'result.messages': '{n} messages',
+  'result.messages': '{n} {n:message|messages}',
   'result.images': 'images {ok}/{total}',
   'result.size': '{size}',
   'result.tokens': 'source ~{src} tokens · document ~{out} tokens',
@@ -244,48 +249,48 @@ const en: Record<MessageKey, string> = {
   'error.DOWNLOAD_FAILED': 'The file could not be saved.',
   'error.INTERRUPTED': 'The task was interrupted. Please try again.',
   'error.UNKNOWN': 'An unknown error occurred.',
-  'check.messages.match': 'All {source} source messages were captured ({messages} messages in the document)',
-  'check.messages.missing': '{missing} source messages could not be converted',
+  'check.messages.match': '{source:The source message was|All {source} source messages were} captured ({messages} {messages:message|messages} in the document)',
+  'check.messages.missing': '{missing} source {missing:message|messages} could not be converted',
   'check.dom.more': 'The page shows more user messages ({dom}) than were extracted ({exported})',
   'check.answer.inProgress': 'The last AI reply was still being written. Run this again when it finishes to include all of it',
   'check.answer.empty': 'The last AI reply has no visible content (still being written, or thinking only). Run this again once it has finished',
   'check.method.dom': 'Extracted from the page (DOM) instead of the service API; some formatting may be simplified',
-  'check.pages': 'Loaded the long conversation to the end across {pages} pages',
-  'check.images.all': 'All {total} images included',
-  'check.images.missing': '{missing}/{total} images could not be fetched',
-  'check.images.linked': '{total} images are included as source URLs (they open only in a browser logged in to the service; the ZIP backup stores files)',
-  'check.images.omitted': '{total} images were left out as chosen (marked [Image])',
-  'check.images.folder': '{n} images saved in the {folder} folder next to the .md',
-  'check.images.folderFailed': '{n} images could not be saved in the {folder} folder',
+  'check.pages': 'Loaded the long conversation to the end across {pages} {pages:page|pages}',
+  'check.images.all': '{total:The image is included|All {total} images included}',
+  'check.images.missing': '{missing}/{total} {total:image|images} could not be fetched',
+  'check.images.linked': '{total} {total:image is|images are} included as {total:a source URL|source URLs} ({total:it opens|they open} only in a browser logged in to the service; the ZIP backup stores files)',
+  'check.images.omitted': '{total} {total:image was|images were} left out as chosen (marked [Image])',
+  'check.images.folder': '{n} {n:image|images} saved in the {folder} folder next to the .md',
+  'check.images.folderFailed': '{n} {n:image|images} could not be saved in the {folder} folder',
   'check.images.none': 'No images',
-  'check.attachments.saved': 'Saved {saved}/{total} attachments as files',
-  'check.attachments.missing': '{missing} attachments were not accessible; only their name and type are kept',
-  'check.attachments.meta': '{total} attachments are listed by name and type',
-  'check.attachments.text': 'Text extracted by the service is included for {n} attachments',
-  'check.tools.clipped': '{n} long tool outputs are shortened in the document (full text in JSON/ZIP backups)',
-  'check.sources.uncited': '{n} search-result links the answer did not cite were left out of the document (kept in the JSON/ZIP backup)',
-  'check.math.latex': '{n} formulas are kept as LaTeX source (this format does not create equation objects)',
-  'check.math.rendered': '{n} formulas rendered',
-  'check.math.failed': '{n} formulas failed to render and were kept as LaTeX source',
-  'check.tables.ok': '{n} tables converted to real tables',
-  'check.code.ok': '{n} code blocks (indentation and language preserved)',
-  'check.thinking.excluded': '{n} thinking blocks were left out of the document (kept in JSON/ZIP)',
-  'check.thinking.kept': '{n} thinking blocks included',
-  'check.skipped.hidden': '{n} hidden system/tool messages were excluded',
-  'check.truncated.source': '{n} messages were stored truncated by the service',
-  'check.branches.saved': '{n} alternative answer branches are kept in JSON/ZIP backups',
-  'check.branches.note': '{n} alternative answer branches exist (only the visible branch is in the document)',
+  'check.attachments.saved': 'Saved {saved}/{total} {total:attachment as a file|attachments as files}',
+  'check.attachments.missing': '{missing} {missing:attachment was|attachments were} not accessible; only {missing:its|their} name and type are kept',
+  'check.attachments.meta': '{total} {total:attachment is|attachments are} listed by name and type',
+  'check.attachments.text': 'Text extracted by the service is included for {n} {n:attachment|attachments}',
+  'check.tools.clipped': '{n} long tool {n:output is|outputs are} shortened in the document (full text in JSON/ZIP backups)',
+  'check.sources.uncited': '{n} search-result {n:link|links} the answer did not cite {n:was|were} left out of the document (kept in the JSON/ZIP backup)',
+  'check.math.latex': '{n} {n:formula is|formulas are} kept as LaTeX source (this format does not create equation objects)',
+  'check.math.rendered': '{n} {n:formula|formulas} rendered',
+  'check.math.failed': '{n} {n:formula|formulas} failed to render and {n:was|were} kept as LaTeX source',
+  'check.tables.ok': '{n:1 table converted to a real table|{n} tables converted to real tables}',
+  'check.code.ok': '{n} code {n:block|blocks} (indentation and language preserved)',
+  'check.thinking.excluded': '{n} thinking {n:block was|blocks were} left out of the document (kept in JSON/ZIP)',
+  'check.thinking.kept': '{n} thinking {n:block|blocks} included',
+  'check.skipped.hidden': '{n} hidden system/tool {n:message was|messages were} excluded',
+  'check.truncated.source': '{n} {n:message was|messages were} stored truncated by the service',
+  'check.branches.saved': '{n} alternative answer {n:branch is|branches are} kept in JSON/ZIP backups',
+  'check.branches.note': '{n} alternative answer {n:branch exists|branches exist} (only the visible branch is in the document)',
   'check.output.ok': 'The generated {format} file passed structural validation',
   'check.output.invalid': 'The generated file failed structural validation: {detail}',
   'check.download.ok': 'Download complete ({size})',
   'check.download.mismatch': 'Saved file size ({saved}) differs from generated size ({expected})',
   'check.download.renamed': 'Another extension renamed the file to "{name}" (intended name: {expected})',
   'check.pdf.print': 'The PDF is produced locally by Chrome’s print engine; confirm saving in the print dialog',
-  'check.pdf.rendered': 'Rendered {n} messages for printing',
+  'check.pdf.rendered': 'Rendered {n} {n:message|messages} for printing',
   'check.handoff.full': 'The conversation is short, so the full transcript is included',
   'check.handoff.compressed': 'Condensed ~{src} source tokens to {out} tokens',
-  'check.handoff.uncertain': '{n} uncertain items are marked with ⚠️',
-  'check.handoff.cache': 'Reused {hits} previously analyzed segments',
+  'check.handoff.uncertain': '{n} uncertain {n:item is|items are} marked with ⚠️',
+  'check.handoff.cache': 'Reused {hits} previously analyzed {hits:segment|segments}',
   'check.hwpx.compat': 'Generated as HWPX (OWPML). Table and style rendering may vary slightly by Hangul version',
   'doc.user': 'User',
   'doc.exportedAt': 'Exported',
@@ -297,7 +302,7 @@ const en: Record<MessageKey, string> = {
   'doc.file': 'file',
   'doc.sources': 'Sources',
   'doc.tool': 'Tool',
-  'doc.toolClipped': '({n} characters omitted — the JSON/ZIP backup has the full output)',
+  'doc.toolClipped': '({n} {n:character|characters} omitted — the JSON/ZIP backup has the full output)',
   'doc.toolOutput': 'Tool output',
   'doc.artifact': 'Artifact',
   'doc.image': 'Image',
@@ -316,7 +321,7 @@ const en: Record<MessageKey, string> = {
   'print.missing': 'Conversation data was not found. Run the export again from the extension.',
 };
 
-const DICTS: Record<Locale, Record<MessageKey, string>> = { ko, en };
+export const DICTS: Record<Locale, Record<MessageKey, string>> = { ko, en };
 
 export function detectLocale(lang?: string): Locale {
   const l = (lang ?? (typeof navigator !== 'undefined' ? navigator.language : 'ko')).toLowerCase();
@@ -326,12 +331,22 @@ export function detectLocale(lang?: string): Locale {
   return 'ko';
 }
 
+/** `{name:singular|plural}`; either form may hold `{placeholders}`. */
+const PLURAL = /\{(\w+):((?:[^{}|]|\{\w+\})*)\|((?:[^{}|]|\{\w+\})*)\}/g;
+
+/**
+ * Fills a template. `{name}` takes the parameter (left as is when the parameter is missing, or
+ * replaced by `missing` when given). `{name:singular|plural}` picks the singular form only when the
+ * parameter is exactly 1, so English counts agree: '{n} {n:table|tables}'. Plural forms are chosen
+ * before parameters are inserted, so parameter text is never parsed as a template.
+ */
+export function fillTemplate(s: string, params?: Record<string, string | number>, missing?: string): string {
+  const out = s.replace(PLURAL, (_, k: string, one: string, other: string) => (Number(params?.[k]) === 1 ? one : other));
+  return out.replace(/\{(\w+)\}/g, (m, k: string) => (params && k in params ? String(params[k]) : (missing ?? m)));
+}
+
 export function t(locale: Locale, key: MessageKey, params?: Record<string, string | number>): string {
-  let s = DICTS[locale][key] ?? ko[key] ?? key;
-  if (params) {
-    for (const [k, v] of Object.entries(params)) s = s.split(`{${k}}`).join(String(v));
-  }
-  return s;
+  return fillTemplate(DICTS[locale][key] ?? ko[key] ?? key, params);
 }
 
 /**

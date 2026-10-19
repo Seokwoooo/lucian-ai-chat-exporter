@@ -1329,7 +1329,7 @@ export function repeatNote(n: number, ms: number[], lang: 'ko' | 'en'): string {
   const refs = [...new Set(ms)].sort((a, b) => a - b).map((m) => `[#m${m + 1}]`).join(', ');
   return lang === 'ko'
     ? `_(… ${n}줄 생략 — 같거나 거의 같은 내용이 아래 ${refs}에 있습니다)_`
-    : `_(… ${n} lines omitted — the same or nearly the same text is in ${refs} below)_`;
+    : `_(… ${n} ${n === 1 ? 'line' : 'lines'} omitted — the same or nearly the same text is in ${refs} below)_`;
 }
 
 /**
