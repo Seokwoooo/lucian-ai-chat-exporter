@@ -185,9 +185,17 @@ export function convertClaudeMessage(m: Json): ExportContent[] {
   return out;
 }
 
+/** "assistant:text+tool_use" — the block types of a message that could not be converted. */
+function claudeKind(m: Json): string {
+  const blocks: Json[] = Array.isArray(m.content) ? m.content : [];
+  const types = [...new Set(blocks.map((b) => String(b?.type ?? 'unknown')))];
+  return `${m.sender === 'human' ? 'user' : 'assistant'}:${types.join('+') || 'text'}`;
+}
+
 function convertList(list: Json[], model: string | undefined) {
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
+  const missingKinds: string[] = [];
   const skipped: SkippedNode[] = [];
   let visible = 0;
   let truncated = 0;
@@ -198,6 +206,7 @@ function convertList(list: Json[], model: string | undefined) {
       if (hadRaw) {
         visible++;
         missing.push(m.uuid);
+        missingKinds.push(claudeKind(m));
       } else skipped.push({ id: m.uuid, reason: 'empty' });
       continue;
     }
@@ -214,7 +223,7 @@ function convertList(list: Json[], model: string | undefined) {
       contents,
     });
   }
-  return { messages, missing, skipped, visible, truncated };
+  return { messages, missing, missingKinds, skipped, visible, truncated };
 }
 
 export function parseClaudeConversation(data: Json, opts: { conversationId: string; url: string }): Conversation {
@@ -260,6 +269,7 @@ export function parseClaudeConversation(data: Json, opts: { conversationId: stri
       method: 'api',
       sourceNodeCount: main.visible,
       missingNodeIds: main.missing,
+      missingKinds: main.missingKinds,
       skipped: main.skipped,
       truncatedBySource: main.truncated || undefined,
       warnings: [],

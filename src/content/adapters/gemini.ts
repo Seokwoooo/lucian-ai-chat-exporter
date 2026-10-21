@@ -109,9 +109,10 @@ function modelOf(candidate: Json[]): string | undefined {
 }
 
 /** Tech doc §6.4 FC: converts one turn into a user and an assistant message. */
-export function convertGeminiTurn(turn: Json): { messages: ExportMessage[]; missing: string[]; skipped: SkippedNode[]; visible: number } {
+export function convertGeminiTurn(turn: Json): { messages: ExportMessage[]; missing: string[]; missingKinds: string[]; skipped: SkippedNode[]; visible: number } {
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
+  const missingKinds: string[] = [];
   const skipped: SkippedNode[] = [];
   let visible = 0;
   const ids = Array.isArray(turn?.[0]) ? turn[0] : [];
@@ -129,6 +130,7 @@ export function convertGeminiTurn(turn: Json): { messages: ExportMessage[]; miss
   } else if (turn?.[2] != null) {
     visible++;
     missing.push(`${responseId}:q`);
+    missingKinds.push('user:prompt');
   }
 
   if (Array.isArray(answer)) {
@@ -147,6 +149,7 @@ export function convertGeminiTurn(turn: Json): { messages: ExportMessage[]; miss
         messages.push({ id, ids: [id], role: 'assistant', model: modelOf(cand), created_at: time, contents });
       } else {
         missing.push(id);
+        missingKinds.push('assistant:answer');
       }
     } else {
       skipped.push({ id: responseId, reason: 'no-candidate' });
@@ -154,12 +157,13 @@ export function convertGeminiTurn(turn: Json): { messages: ExportMessage[]; miss
   } else {
     skipped.push({ id: responseId, reason: 'answer-pending' });
   }
-  return { messages, missing, skipped, visible };
+  return { messages, missing, missingKinds, skipped, visible };
 }
 
 export function buildGeminiConversation(items: Json[], opts: { conversationId: string; url: string; title: string; pages: number }): Conversation {
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
+  const missingKinds: string[] = [];
   const skipped: SkippedNode[] = [];
   let visible = 0;
   const seen = new Set<string>();
@@ -170,6 +174,7 @@ export function buildGeminiConversation(items: Json[], opts: { conversationId: s
     const r = convertGeminiTurn(turn);
     messages.push(...r.messages);
     missing.push(...r.missing);
+    missingKinds.push(...r.missingKinds);
     skipped.push(...r.skipped);
     visible += r.visible;
   }
@@ -184,7 +189,7 @@ export function buildGeminiConversation(items: Json[], opts: { conversationId: s
     pageType: 'fullPage',
     model: [...messages].reverse().find((m) => m.model)?.model,
     messages,
-    extraction: { method: 'api', sourceNodeCount: visible, missingNodeIds: missing, skipped, pages: opts.pages, warnings: [], fetchedAt: Date.now() },
+    extraction: { method: 'api', sourceNodeCount: visible, missingNodeIds: missing, missingKinds, skipped, pages: opts.pages, warnings: [], fetchedAt: Date.now() },
   };
   if (!conv.title) conv.title = titleFromFirstUserMessage(conv);
   return conv;
@@ -297,6 +302,12 @@ export const geminiAdapter: SiteAdapter = {
 
   actionBars() {
     return [...document.querySelectorAll('model-response message-actions .buttons-container-v2')];
+  },
+
+  // The toolbar is [thumbs, copy, more] then a flex `.spacer` that fills the row (checked
+  // 2026-10-21): appended after it, the button stood alone at the far right.
+  actionAnchor(bar) {
+    return bar.querySelector(':scope > .spacer');
   },
 
   domFallback(ctx, conversationId) {

@@ -35,7 +35,7 @@ popup.html — 두 영역(인수인계 / 내보내기), 진행 상태, 검증 �
 | ChatGPT | `GET /backend-api/conversation/{id}`. 인증 헤더는 관찰한 값, 없으면 `/api/auth/session`. `mapping` 트리를 `current_node`부터 거슬러 올라가 현재 분기를 복원하고, 나머지 잎은 다른 분기로 보존합니다. 숨김·시스템·도구 호출 노드는 건너뛰고 그 이유를 기록합니다. 2026-10 형식: `commentary` 채널(사고 중 안내문)은 thinking으로 분류하고, `container.exec` 실행은 화면에 보이지 않으므로 건너뜁니다. 이미지·첨부는 `/backend-api/files/download/{id}`로 받습니다. | DOM: `[data-message-author-role]` 또는 `[data-chatgpt-search-unit-key]`·`[data-user-message-bubble]`. 앱 안에서 옮겨 다니면 이전 대화가 `display: none`으로 남으므로, 모든 사이트에서 렌더링된 요소만 셉니다(`renderedElements`). |
 | Claude | `lastActiveOrg` 쿠키(없으면 `/api/organizations`) → `chat_conversations/{id}?tree=True&rendering_mode=messages&render_all_tools=true` → `current_leaf_message_uuid`에서 `parent_message_uuid`를 따라 경로를 만듭니다. text/thinking/tool_use/tool_result/artifacts를 변환합니다. | DOM: `[data-testid=user-message]`, `[data-testid=assistant-message]` (키는 `data-turn-key`) |
 | Gemini | `WIZ_global_data`(`SNlM0e`→at, `FdrFJe`→f.sid, `cfb2h`→bl), `_reqid`(관찰값+100000)와 `x-goog-ext-*` 헤더로 `batchexecute?rpcids=hNvQHb`를 호출합니다. cursor가 없어질 때까지 페이지를 이어 받고, 앞쪽에 붙입니다. | DOM: `user-query`, `model-response` |
-| Grok | `conversations_v2/{id}`(제목) → `response-node?includeThreads=true` → `load-responses`(청크). `createTime`이 가장 최근인 분기를 따르고, `partial` 노드는 버리며, `<grok:render>` 인용은 링크로 바꿉니다. | DOM: `.message-bubble` |
+| Grok | `conversations_v2/{id}`(제목) → `response-node?includeThreads=true` → `load-responses`(청크). `createTime`이 가장 최근인 분기를 따르고, `partial` 노드는 버리며, `<grok:render>` 인용은 링크로 바꿉니다. 첫 질문의 부모는 노드 목록에 없는 빈 `system` 응답이라, 경로는 목록에 있는 노드만 따라갑니다(v1.3.8). 생성에 실패한 답변(`streamErrors`만 있음)은 화면처럼 오류 문구로 남깁니다. | DOM: `.message-bubble` |
 
 어댑터의 파서는 순수 함수이고 `tests/adapters`의 fixture로 테스트합니다. 사이트 구조가 바뀌면 어댑터 파일 하나만 고치면 됩니다.
 
@@ -46,11 +46,13 @@ popup.html — 두 영역(인수인계 / 내보내기), 진행 상태, 검증 �
 
 ### 답변 아래 버튼 (src/content/page-ui.ts)
 
-- 각 어댑터의 `actionBars()`가 사이트별 도구 막대 위치를 돌려줍니다: ChatGPT `.turn-action-controls`(사용자 말풍선 제외), Claude `[data-testid=assistant-message] [data-testid=message-actions]`, Gemini `model-response message-actions .buttons-container-v2`, Grok `[id^=response-]:not(.items-end) .action-buttons`.
+- 각 어댑터의 `actionBars()`가 사이트별 도구 막대 위치를 돌려줍니다: ChatGPT `.turn-action-controls`(사용자 말풍선 제외), Claude `[data-testid=assistant-message] [data-testid=message-actions]`, Gemini `model-response message-actions .buttons-container-v2`(버튼 뒤에 줄을 채우는 `.spacer`가 있어 `actionAnchor()`로 그 앞에 넣음, v1.3.8), Grok `[id^=response-]:not(.items-end) .action-buttons`.
 - 도구 막대는 답변이 끝난 뒤에 렌더링되므로 버튼도 그때 나타납니다. `MutationObserver`(300ms 묶음 처리)로 다시 그려진 도구 막대에 버튼을 다시 붙이고, 사이트가 버튼을 지운 도구 막대(마우스를 올렸을 때만 보이는 경우)에서는 함께 지웁니다. 확장이 다시 로드되면 이전 스크립트의 버튼은 스스로 사라집니다.
 - 버튼과 패널은 Shadow DOM이라 사이트 CSS와 섞이지 않습니다. 패널은 팝업과 같은 `start-job`/`get-job` 메시지를 쓰고(탭은 발신 탭), 결과·경고를 보여 주며, 닫혀 있을 때 끝나면 작은 알림을 띄웁니다. 페이지 배경 밝기로 라이트/다크를 고릅니다.
 - 버튼은 사이트 아이콘과 같은 크기지만 보라→청록 그라데이션 링이 천천히 돌고 뒤쪽 빛이 은은하게 숨 쉬듯 바뀝니다(CSS만 사용, `prefers-reduced-motion`이면 멈춤).
 - 형식 버튼 로고와 Markdown 이미지 선택지 아이콘(`src/shared/ui-icons.ts`, 팝업과 패널 공용, v1.3.7): 인라인 SVG라 패널의 Shadow DOM에서도 그대로 쓰고 외부 파일을 읽지 않습니다. 기본 줄은 Markdown·PDF·TXT, “다른 형식 더 보기”는 Word·HWPX·HTML·JSON·ZIP입니다. PDF·Word 로고는 Adobe·Microsoft 상표 모양이고 Markdown 마크는 퍼블릭 도메인이며, 모두 파일 형식을 가리키는 용도로만 씁니다. 이미지 선택은 문제가 아니라 질문이라 경고 아이콘 대신 사진 아이콘을 쓰고(`data-level="choose"`), ZIP에 “추천”을 붙입니다.
+- 원본 표시(v1.3.8): 모든 문서 머리말(Markdown·TXT·HTML/PDF·DOCX·HWPX·검증 보고서)과 인수인계 「기본 정보」의 원본은 `sourceDomain()`(`src/shared/sites.ts`)이 돌려주는 사이트 주소(`chatgpt.com`, `claude.ai`, `gemini.google.com`, `grok.com`)입니다. 대화 링크의 호스트를 쓰고, 지원 사이트가 아니면 서비스 기본 주소로 대신합니다. 모델 이름은 머리말·메시지 제목·인수인계 원문 제목에 넣지 않고 JSON(ZIP 안 포함)에만 남깁니다.
+- 결과 표시(v1.3.8): 저장된 인수인계는 문제가 있어도 팝업·패널·알림 모두 ✓ “인수인계 파일 저장 완료”로 보여 줍니다(`shownLevel`, `src/export/report.ts`). 경고·실패 항목은 접힌 “세부 정보” 맨 위에 “!”로 나오고(`shownStatus`, `issuesFirst`), 파일을 만들거나 저장하지 못한 작업(phase `error`)만 실패로 보입니다. 검증 데이터(`verification.level`, ZIP·JSON 보고서)는 실제 수준을 그대로 둡니다. 내보내기는 이전처럼 검증 수준을 그대로 보여 줍니다. 어댑터는 읽지 못한 메시지마다 `extraction.missingKinds`에 “역할:형식”(예: `assistant:multimodal_text(audio_transcription)`)을 남겨 세부 정보가 무엇이 빠졌는지 말합니다.
 - 인수인계 버튼 위 그림(`src/shared/handoff-visual.ts`, 팝업과 패널 공용): 현재 서비스 로고 → 곡선 화살표 위로 움직이는 MD 문서 → 나머지 서비스 로고가 번갈아 나타납니다. 화살표는 두 로고 사이 120px 고정 칸에 1:1 픽셀로 그려서, 컨테이너 폭과 상관없이 두 로고의 세로 가운데를 잇습니다. 로고 SVG는 `providers/`에 들어 있고 `web_accessible_resources`로 다섯 사이트에만 공개합니다. 로고는 각 회사의 상표이며 서비스를 가리키는 용도로만 씁니다.
 
 ### 진행률
@@ -104,7 +106,12 @@ popup.html — 두 영역(인수인계 / 내보내기), 진행 상태, 검증 �
    - 잘린 메시지에서 어떤 문장이 원문 섹션에 보이는지는 메시지 안에서 순서대로 찾아 판단합니다(같은 문장이 앞부분에 한 번 나와도 가운데의 같은 문장을 "보인다"고 보지 않음).
    - 첫 계산이 예산을 넘거나 4% 넘게 모자라면, 최대 두 번까지 그 차이를 중요한 맥락에서 빼거나 더합니다. 결과는 예산의 102%를 넘지 않고, 예산이 작아지면 문서도 작아집니다.
    - 선택 방식은 실제 대화로, 분량 배분은 질의응답 평가(합성 대화, 읽는 AI가 문서만 보고 답함)로 비교해 정했습니다([compression-lab.md](compression-lab.md)).
-6. **render**: 사용자 요청은 시간순 "요청 흐름"으로 한 줄씩 보여 주고(거의 같은 요청은 한 줄로 묶어 횟수 표시), 긴 대화에서는 각 답변의 요지 문장을 붙입니다. 출처 칩·추적 파라미터를 지우고, 표·제목은 항목 목록에 넣지 않으며, 원문 안의 제목은 문서 목차보다 낮은 단계로 내립니다. 비어 있는 섹션은 넣지 않습니다. 12k 토큰 이하의 대화는 원문 전체를 넣습니다. 이때 위 섹션들은 원문의 색인 역할만 합니다(v1.3.4, `fullIndex`). 요청은 120자까지만 쓰고 답변 요지는 붙이지 않습니다. 마지막 요청은 160자까지만 인용하고, 마지막 답변은 핵심 문장 대신 원문 위치를 가리킵니다. 완료·미완료 항목은 120자까지 씁니다. 결정, 지시사항·제한사항, 다음 작업은 줄이지 않습니다. 메시지 참조 색인(역할·시각·첫 줄 표)은 질문에 답하는 데 쓰이지 않으면서 문서의 7–12%를 차지해서, v1.3부터 기본으로 넣지 않습니다(`refIndex`).
+6. **render**: 사용자 요청은 시간순 "요청 흐름"으로 한 줄씩 보여 주고(거의 같은 요청은 한 줄로 묶어 횟수 표시), 긴 대화에서는 각 답변의 요지 문장을 붙입니다. 출처 칩·추적 파라미터를 지우고, 표·제목은 항목 목록에 넣지 않으며, 원문 안의 제목은 문서 목차보다 낮은 단계로 내립니다. 비어 있는 섹션은 넣지 않습니다. 안내문은 문서에 있는 섹션만 가리킵니다(결정·지시가 없으면 그 항목을, ⚠️가 없으면 그 항목을 뺍니다).
+   - **크기 보장 (v1.3.8)**: 인수인계는 같은 대화의 전체 추출보다 항상 작습니다. `sourceTokens`는 전체 Markdown 추출의 토큰 수(`fullExportTokens`, 가장 짧은 라벨·이미지 링크 없이)이고, 예산은 그 12%(8k–32k)이되 2/3를 넘지 않습니다(`handoffBudget`). 예산 맞춤 단계 뒤에도 넘으면 선택 섹션을 빼고(`squeeze`) 원문을 더 줄이며, 그래도 넘으면 핵심 문장 형식으로 만듭니다. 이전에는 12k 토큰 이하 대화를 원문 전체 + 섹션(색인)으로 만들어 전체 추출보다 29–38% 컸습니다.
+   - **핵심 문장 형식**: 예산이 4천 토큰 미만이면(전체 추출 약 6천 토큰 미만) 섹션 대신 대화 원문의 핵심 문장만 메시지 순서대로 남깁니다(`buildCondensed`). 마지막 메시지·마지막 요청·첫 요청의 앞부분, 사용자 문장, 개념 커버리지, 점수 순으로 채우고, 생략한 곳은 `…`로 표시합니다. 예산이 작으면 꼬리말 → 출처 줄 → 긴 안내문 순으로 줄입니다. 실제 짧은 대화 3개에서 같은 크기의 섹션 형식보다 보존 점수가 높았습니다(59.5–81.3 → 85.3–88.0, [압축 실험](compression-lab.md)).
+   - 작은 예산에서는 최소 분량(최근 원문, 코드, 첨부, 목록 개수)을 예산에 비례해 줄입니다. 8천 토큰 이상에서는 이전과 같습니다.
+   - "중요한 맥락"을 고르기 전에 나머지 부분을 실제로 그려 크기를 잽니다(몇 ms). 발췌 한 줄의 비용은 그려지는 그대로(자르기, 메시지 묶음 줄) 셉니다. 첫 계산이 예산 ±4% 안에 들어 재계산이 거의 없습니다.
+   - 토큰 수(`estimateTokens`)는 BPE 토크나이저처럼 글자를 단어·숫자 묶음·문장부호·줄바꿈 단위로 나눠 세며, o200k와 ±7% 안입니다(v1.3.8). 이전 규칙은 마크업을 절반쯤으로 셌습니다. 메시지 참조 색인(역할·시각·첫 줄 표)은 질문에 답하는 데 쓰이지 않으면서 문서의 7–12%를 차지해서, v1.3부터 기본으로 넣지 않습니다(`refIndex`).
 
 ## 저장소
 

@@ -10,7 +10,7 @@ import { strFromU8, unzipSync } from 'fflate';
 import puppeteer, { type Browser, type CDPSession, type Page, type Target } from 'puppeteer-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { JobState } from '../../src/shared/types';
-import { handoffFilename } from '../../src/shared/util';
+import { estimateTokens, handoffFilename } from '../../src/shared/util';
 import { PAGES, calls, failApi, hiddenEarlierConversation, route } from './mock-sites';
 
 const DIST = resolve('dist');
@@ -264,6 +264,10 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       await page.waitForSelector('[data-lucian-action]', { timeout: 10_000 });
       await new Promise((r) => setTimeout(r, 400));
       expect(await page.$$eval('[data-lucian-action]', (els) => els.length), site).toBe(expected[site]);
+      if (site === 'gemini') {
+        // Gemini's toolbar ends with a flex spacer: the button goes right after the site's buttons.
+        expect(await page.$eval('[data-lucian-action]', (h) => h.nextElementSibling?.classList.contains('spacer') && h.previousElementSibling?.getAttribute('aria-label'))).toBe('Copy');
+      }
       const trigger = await page.waitForSelector('[data-lucian-action] >>> button');
       if (site === 'chatgpt') {
         await new Promise((r) => setTimeout(r, 600));
@@ -300,7 +304,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       await page.waitForFunction(
         () => {
           const box = document.querySelector('[data-lucian-panel]')?.shadowRoot?.querySelector('.status');
-          return box?.getAttribute('data-level') === 'ok' && /인수인계 파일을 저장했습니다|Handoff file saved/.test(box.querySelector('.title')?.textContent ?? '');
+          return box?.getAttribute('data-level') === 'ok' && /인수인계 파일 저장 완료|Handoff file saved/.test(box.querySelector('.title')?.textContent ?? '');
         },
         { timeout: 10_000 },
       );
@@ -310,6 +314,11 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
           return { x: r.x, y: r.y, width: r.width, height: r.height };
         });
         await page.screenshot({ path: join(SHOTS, 'page-button-done.png'), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 32 } });
+        // The handoff's checks stay folded under "details" until asked for (v1.3.8).
+        const listed = () => page.$eval('[data-lucian-panel]', (h) => h.shadowRoot!.querySelectorAll('.status .checks li').length);
+        expect(await listed()).toBe(0);
+        await page.evaluate(() => (document.querySelector('[data-lucian-panel]')!.shadowRoot!.querySelector('[data-act="info"]') as HTMLButtonElement).click());
+        expect(await listed()).toBeGreaterThan(0);
         // Markdown from the panel: the same choice appears there, and the answer is carried out.
         const t1 = Date.now();
         await page.evaluate(() => (document.querySelector('[data-lucian-panel]')!.shadowRoot!.querySelector('.fmt[data-format="md"]') as HTMLButtonElement).click());
@@ -356,6 +365,17 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
         const checks = viaPage.job.result?.verification.checks ?? [];
         expect(checks.some((c) => c.code === 'method.dom'), `${site}: ${JSON.stringify(checks)}`).toBe(true);
         expect(checks.find((c) => c.code === 'dom.more'), site).toBeUndefined();
+        // Read from the page instead of the API is a warning, yet a saved handoff reads as saved:
+        // the gap is the first line under "details", marked "!" (v1.3.8).
+        await popup.waitForFunction(
+          () => document.getElementById('status')?.dataset.level === 'ok' && /인수인계 파일 저장 완료|Handoff file saved/.test(document.getElementById('statusText')?.textContent ?? ''),
+          { timeout: 10_000 },
+        );
+        expect(await popup.$eval('#checks', (el) => (el as HTMLElement).hidden), site).toBe(true);
+        await popup.click('#detailsBtn');
+        const items = await popup.$$eval('#checks li', (lis) => lis.map((li) => ({ s: (li as HTMLElement).dataset.s, text: li.textContent ?? '' })));
+        expect(items[0]?.s, site).toBe('warn');
+        expect(items.find((i) => /DOM/.test(i.text))?.s, site).toBe('warn');
         const md = readFileSync(newestDownload('md', viaPage.job.startedAt), 'utf8');
         expect(md, site).not.toContain('이전 대화');
         report.push({ site, kind: 'hidden-earlier-conversation', apiMs: viaApi.ms, domFallbackMs: viaPage.ms, messages: viaPage.job.result?.handoffStats?.messages });
@@ -376,8 +396,11 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
       const handoffFile = newestDownload('md', h.job.startedAt);
       expect(handoffFile).toMatch(handoffName(h.job.title, h.job.startedAt));
       const handoff = readFileSync(handoffFile, 'utf8');
-      expect(handoff).toMatch(/## (0\. 기본 정보|0\. Source)/);
+      // Short mock chats get the condensed form; long ones the sections (v1.3.8).
+      expect(handoff).toMatch(/^## (0\. 기본 정보|0\. Source|대화 원문 \(핵심 문장만\)|Conversation \(key sentences verbatim\))/m);
       expect(handoff).toMatch(/\[#m1\]/);
+      expect(h.job.result?.verification.checks.some((c) => c.code === 'handoff.condensed' || c.code === 'handoff.compressed')).toBe(true);
+      expect(h.job.result?.verification.checks.find((c) => c.code === 'handoff.size'), `${site}: handoff not smaller than the full export`).toBeUndefined();
       expect(h.job.result?.verification.checks.some((c) => c.code === 'download.ok' && c.status === 'pass')).toBe(true);
       expect(h.job.result?.verification.checks.filter((c) => c.status === 'fail'), `${site}/handoff failed checks`).toEqual([]);
       expect(h.job.result?.verification.checks.find((c) => c.code === 'output.ok')?.status).toBe('pass');
@@ -441,6 +464,11 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
         const bytes = readFileSync(file);
         expect(bytes.byteLength).toBe(r.job.result!.bytes);
         writeFileSync(join(OUT, `${site}-export.${format}`), bytes);
+        // The handoff is smaller than the full export of the same chat (user report, 2026-10-21).
+        if (format === 'md' || format === 'txt') {
+          const full = estimateTokens(bytes.toString('utf8'));
+          expect(estimateTokens(handoff), `${site}: handoff vs ${format} export`).toBeLessThan(full * 0.7);
+        }
         if (format === 'docx' || format === 'hwpx' || format === 'zip') expect(() => unzipSync(new Uint8Array(bytes))).not.toThrow();
         if (format === 'json') expect(JSON.parse(bytes.toString('utf8')).conversation.messages.length).toBe(v.counts.messages);
         if (['docx', 'hwpx', 'html', 'zip'].includes(format) && v.counts.images > 0) {

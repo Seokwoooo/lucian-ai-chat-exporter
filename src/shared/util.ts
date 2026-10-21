@@ -14,16 +14,88 @@ export function hashHex(str: string): string {
   return fnv1a(str).toString(16).padStart(8, '0') + fnv1a(str, 0x01000193).toString(16).padStart(8, '0');
 }
 
-const CJK_RE = /[ᄀ-ᇿ぀-ヿ㄰-㆏㐀-䶿一-鿿가-힯豈-﫿]/g;
+// Character classes for estimateTokens.
+const T_HANGUL = 1;
+const T_CJK = 2;
+const T_WORD = 3;
+const T_DIGIT = 4;
+const T_SPACE = 5;
+const T_NEWLINE = 6;
+const T_PUNCT = 7;
+const T_SYMBOL = 8;
+const T_ASTRAL = 9;
+const T_BLOCK = 10;
+const T_JOINER = 11;
+
+function tokenClass(c: number): number {
+  if (c < 128) {
+    if ((c >= 97 && c <= 122) || (c >= 65 && c <= 90)) return T_WORD;
+    if (c >= 48 && c <= 57) return T_DIGIT;
+    if (c === 32 || c === 9) return T_SPACE;
+    if (c === 10 || c === 13) return T_NEWLINE;
+    return T_PUNCT;
+  }
+  if (c >= 0xac00 && c <= 0xd7af) return T_HANGUL;
+  if ((c >= 0x1100 && c <= 0x11ff) || (c >= 0x3040 && c <= 0x30ff) || (c >= 0x3130 && c <= 0x318f) || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff)) return T_CJK;
+  if ((c >= 0xc0 && c <= 0x24f) || (c >= 0x370 && c <= 0x52f)) return T_WORD;
+  if (c >= 0xd800 && c <= 0xdbff) return T_ASTRAL;
+  if ((c >= 0xdc00 && c <= 0xdfff) || (c >= 0xfe00 && c <= 0xfe0f) || c === 0x200d) return T_JOINER;
+  if (c >= 0x2500 && c <= 0x259f) return T_BLOCK;
+  return T_SYMBOL;
+}
 
 /**
- * Rough token estimate that works for mixed Korean/Japanese/English text without a tokenizer:
- * CJK characters count ~1 token each, other characters ~4 per token.
+ * Token estimate without a tokenizer, close to what current tokenizers (OpenAI o200k_base) count
+ * for chat text: Korean, English, code, Markdown markup ([#m12], tables, links) and symbols.
+ * Text is split into runs the way BPE tokenizers pre-split it (words, digit groups, punctuation,
+ * newlines) and each run gets a weight fitted on real exports and handoffs, synthetic chats, code
+ * and documents (v1.3.8: within ±7% of o200k on files that were not used for the fit; the old
+ * "1 per CJK character, 4 characters per token" rule counted [#m12] and table markup at half).
+ * A Hangul word costs about 0.6 + 0.5 per syllable, an English word about 0.9, `[#m12]` about 4.
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  const cjk = text.match(CJK_RE)?.length ?? 0;
-  return Math.ceil(cjk + (text.length - cjk) / 4);
+  let t = 0;
+  let prev = 0;
+  let run = 0;
+  const close = () => {
+    switch (prev) {
+      case T_HANGUL:
+        t += 0.6;
+        break;
+      case T_WORD:
+        t += 0.92;
+        break;
+      case T_DIGIT:
+        t += 1.7 * Math.ceil(run / 3);
+        break;
+      case T_PUNCT:
+        t += 0.69;
+        break;
+      case T_NEWLINE:
+        t += 1.35;
+        break;
+      case T_SPACE:
+        if (run >= 2) t += 2.05;
+        break;
+    }
+  };
+  for (let i = 0; i < text.length; i++) {
+    const k = tokenClass(text.charCodeAt(i));
+    if (k !== prev) {
+      close();
+      prev = k;
+      run = 0;
+    }
+    run++;
+    if (k === T_HANGUL) t += 0.5;
+    else if (k === T_CJK) t += 0.7;
+    else if (k === T_SYMBOL) t += 1;
+    else if (k === T_ASTRAL) t += 3;
+    else if (k === T_BLOCK) t += 0.25;
+  }
+  close();
+  return Math.ceil(t);
 }
 
 export function hangulRatio(text: string): number {

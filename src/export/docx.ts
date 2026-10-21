@@ -23,6 +23,7 @@ import {
   type ParagraphChild,
 } from 'docx';
 import { attachmentName, t, formatBytes, type Locale } from '../shared/i18n';
+import { sourceDomain } from '../shared/sites';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 import { EMBEDDABLE, fitSize, type ImageStore } from './images';
@@ -393,10 +394,9 @@ export async function buildDocx(
   const ctx: Ctx = { locale: opts.locale, images: opts.images, stats, listInstance: 0 };
   const L = opts.locale;
   const meta = [
-    `${t(L, 'doc.source')}: ${conv.siteName}`,
+    `${t(L, 'doc.source')}: ${sourceDomain(conv)}`,
     `${t(L, 'doc.exportedAt')}: ${formatDateTime(exportedAt)}`,
     `${t(L, 'doc.messages')}: ${conv.messages.length}`,
-    conv.model ? `${t(L, 'doc.model')}: ${conv.model}` : '',
   ].filter(Boolean);
 
   const children: Block[] = [

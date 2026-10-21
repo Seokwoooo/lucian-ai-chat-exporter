@@ -2,6 +2,7 @@
 // text. Code is kept verbatim, tables become pipe-separated rows, links keep their URL.
 
 import { t, type Locale } from '../shared/i18n';
+import { sourceDomain } from '../shared/sites';
 import type { Conversation } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 import { messageBodyMarkdown, messageHeaderText } from './markdown';
@@ -113,7 +114,7 @@ export function conversationToTxt(conv: Conversation, locale: Locale, exportedAt
   const headers: string[] = [];
   const lines: string[] = [
     conv.title || conv.siteName,
-    `${t(locale, 'doc.source')}: ${conv.siteName} (${conv.fromUrl})`,
+    `${t(locale, 'doc.source')}: ${sourceDomain(conv)} (${conv.fromUrl})`,
     `${t(locale, 'doc.exportedAt')}: ${formatDateTime(exportedAt)}`,
     `${t(locale, 'doc.messages')}: ${conv.messages.length}`,
   ];

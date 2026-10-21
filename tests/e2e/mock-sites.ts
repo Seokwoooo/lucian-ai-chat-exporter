@@ -154,7 +154,7 @@ export function route(req: MockRequest): MockResponse | null {
     if (u.pathname === `/app/${GEMINI_ID}`) {
       return html(
         'Gemini',
-        '<user-query>q1</user-query><model-response>a1<message-actions><div class="buttons-container-v2"><button aria-label="Copy">c</button></div></message-actions></model-response><user-query>q2</user-query>',
+        '<user-query>q1</user-query><model-response>a1<message-actions><div class="buttons-container-v2"><button aria-label="Copy">c</button><div class="spacer" style="flex:1 1 0%"></div></div></message-actions></model-response><user-query>q2</user-query>',
         '<script>window.WIZ_global_data = {"SNlM0e":"e2e-at-token","FdrFJe":"-1234567890","cfb2h":"boq_assistant-bard-web-server_e2e"};</script>',
       );
     }

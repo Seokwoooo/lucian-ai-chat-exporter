@@ -174,11 +174,13 @@ export async function domFallbackExtract(site: SiteId, ctx: AdapterContext, conv
   if (spec.key) await scanDownwards(collector, spec);
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
+  const missingKinds: string[] = [];
   collector.order.forEach((key, i) => {
     const { role, md } = collector.items.get(key)!;
     const id = `dom-${i + 1}`;
     if (!md) {
       missing.push(id);
+      missingKinds.push(`${role}:screen`);
       return;
     }
     messages.push({ id, ids: [id], role, contents: [{ type: role === 'user' ? 'text' : 'markdown', content: md }] });
@@ -197,6 +199,7 @@ export async function domFallbackExtract(site: SiteId, ctx: AdapterContext, conv
       method: 'dom',
       sourceNodeCount: collector.order.length,
       missingNodeIds: missing,
+      missingKinds,
       skipped: [],
       warnings: [],
       fetchedAt: Date.now(),

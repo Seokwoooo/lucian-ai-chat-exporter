@@ -66,7 +66,12 @@ export function buildVerification(
   // Source nodes (tool steps, reasoning, answer parts) can be merged into fewer document messages,
   // so both numbers are reported.
   if (missing === 0) checks.push({ code: 'messages.match', status: 'pass', params: { exported: source, source, messages: conv.messages.length } });
-  else checks.push({ code: 'messages.missing', status: 'fail', params: { missing } });
+  else {
+    // What was lost ("assistant:multimodal_text(audio_transcription)") so the details name the cause.
+    const params: Record<string, string | number> = { missing };
+    if (ex.missingKinds?.length) params.kinds = ex.missingKinds.join(',');
+    checks.push({ code: 'messages.missing', status: 'fail', params });
+  }
   // The last answer may still have been in progress when the user clicked: say so instead of
   // passing silently (a real handoff once showed only "(empty)" for a long-running answer).
   const last = conv.messages[conv.messages.length - 1];

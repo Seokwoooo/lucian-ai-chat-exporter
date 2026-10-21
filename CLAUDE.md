@@ -82,10 +82,22 @@ popup            src/popup/*                two cards: handoff button, export fo
   and bump `CACHE_VERSION` (src/handoff/cache-codec.ts) whenever `classify()` changes.
 - Handoff noise rules: no uncited search results, no tracking params, a sentence appears in one
   section only, tables/headings never become bullets, every section stays within its budget share.
-  A revised draft is shown once (earlier copies become a `_(… N줄 생략 …)_` note, `collapseRepeats`),
-  and when the whole conversation is included the sections only index it (`fullIndex`).
+  A revised draft is shown once (earlier copies become a `_(… N줄 생략 …)_` note, `collapseRepeats`;
+  never for table rows, and not when the note is longer than the lines).
   Attachment text the record has (pasted text, text files) goes into “첨부 자료” verbatim within
   `attachShare`; files without text are listed so the next AI can ask for them (v1.3.5).
+- The handoff is never larger than the full export of the same chat (user report 2026-10-21: short
+  chats were included whole + sections, 29–38% LARGER). `sourceTokens` = tokens of the full Markdown
+  export (`fullExportTokens`); budget = `handoffBudget` (12%, 8k–32k, ≤ 2/3 of it); the render passes
+  end with a hard ceiling. Budgets below `SECTIONS_FROM` (4k) get the condensed form (the chat's key
+  sentences in order, `buildCondensed`) instead of sections. `estimateTokens` is fitted to o200k
+  (±7%); `tests/handoff/size.test.ts` checks 133 shapes with real tokenizers — keep it green.
+- A saved handoff is always shown as saved: ✓ “인수인계 파일 저장 완료”, its warn/fail checks folded
+  under “세부 정보” and marked “!” (`shownLevel`/`shownStatus` in src/export/report.ts, v1.3.8). Only
+  a handoff that saved no file (phase `error`) shows as failed. Verification data keeps the real level.
+  Missing source messages carry `missingKinds` ("assistant:multimodal_text(…)") so the details name them.
+- Documents and the handoff name the source by its site address (`sourceDomain`, src/shared/sites.ts:
+  "grok.com"), never the model slug; only JSON/ZIP data keep `model` (v1.3.8).
 - User-facing strings go through `src/shared/i18n.ts` (Korean default, English supported).
 - Fixtures must be synthetic — never commit real conversations, cookies or tokens.
 - Site structures change: when a real-site check finds a new shape (e.g. ChatGPT `channel:
@@ -102,8 +114,13 @@ popup            src/popup/*                two cards: handoff button, export fo
 - Documents show what the user saw: thinking is excluded (JSON/ZIP keep it), long tool output is
   clipped to `TOOL_DOC_LIMIT` with a visible note, uncited search results go to `moreSources`
   (JSON/ZIP only); every such decision is reported in verification.
-- The in-page button must not disturb the site: Shadow DOM only, append-only into the toolbar,
-  no reading of the conversation until the user clicks. Toolbar selectors live in `actionBars()`.
+- The in-page button must not disturb the site: Shadow DOM only, added into the toolbar without
+  moving the site's controls (appended, or in front of the element `actionAnchor()` names — Gemini's
+  `.spacer`, v1.3.8), no reading of the conversation until the user clicks. Toolbar selectors live
+  in `actionBars()` / `actionAnchor()`.
+- Grok (2026-10): the first question's parent is a hidden empty `system` response missing from
+  `response-node`; paths walk listed nodes only. Failed answers carry only `streamErrors` and are
+  kept as the notice grok.com shows (`> **Grok error:** …`).
 - `scripts/compression-lab/` compares selection algorithms; results are in `docs/compression-lab.md`.
   The engine's `DEFAULT_SELECTION` (coverage) and `DEFAULT_LAYOUT` were chosen there — re-run the
   lab (`npm run lab`, and `npm run lab:qa -- presence` for the QA evaluation; `qa/ask.mjs` uses a reader

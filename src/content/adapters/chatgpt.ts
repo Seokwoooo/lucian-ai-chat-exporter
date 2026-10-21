@@ -327,7 +327,8 @@ export function applyContentReferences(text: string, refs: Json[] | undefined, i
     const e = ref.end_idx;
     if (typeof s === 'number' && typeof e === 'number' && out.slice(s, e) === ref.matched_text) {
       out = out.slice(0, s) + rep + out.slice(e);
-    } else {
+    } else if (ref.matched_text.trim()) {
+      // Searching for whitespace (sources_footnote's " ") would hit the first space of the answer.
       const i = out.indexOf(ref.matched_text);
       if (i >= 0) out = out.slice(0, i) + rep + out.slice(i + ref.matched_text.length);
     }
@@ -517,12 +518,24 @@ interface PathConversion {
   messages: ExportMessage[];
   visible: number;
   missing: string[];
+  missingKinds: string[];
   skipped: SkippedNode[];
+}
+
+/** "assistant:multimodal_text(audio_transcription)" — what a node that could not be converted held. */
+function nodeKind(node: ChatGPTNode): string {
+  const msg = node.message;
+  const role = msg.author?.role === 'user' ? 'user' : 'assistant';
+  const ct: string = msg.content?.content_type || 'unknown';
+  const parts: Json[] = Array.isArray(msg.content?.parts) ? msg.content.parts : [];
+  const objects = [...new Set(parts.filter((p) => p && typeof p === 'object').map((p) => String(p.content_type ?? 'object')))];
+  return `${role}:${ct}${objects.length ? `(${objects.join('+')})` : ''}`;
 }
 
 function convertPath(nodes: ChatGPTNode[], index?: CitationIndex): PathConversion {
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
+  const missingKinds: string[] = [];
   const skipped: SkippedNode[] = [];
   let visible = 0;
   for (const node of nodes) {
@@ -536,6 +549,7 @@ function convertPath(nodes: ChatGPTNode[], index?: CitationIndex): PathConversio
       if (rawHadContent) {
         visible++;
         missing.push(node.id);
+        missingKinds.push(nodeKind(node));
       } else {
         skipped.push({ id: node.id, reason: 'empty' });
       }
@@ -556,7 +570,7 @@ function convertPath(nodes: ChatGPTNode[], index?: CitationIndex): PathConversio
       messages.push({ id: node.id, ids: [node.id], role, model, created_at: created, updated_at: toEpochMs(msg.update_time) ?? created, contents });
     }
   }
-  return { messages, visible, missing, skipped };
+  return { messages, visible, missing, missingKinds, skipped };
 }
 
 export interface ParseOptions {
@@ -612,6 +626,7 @@ export function parseChatGPTConversation(data: Json, opts: ParseOptions): Conver
       method: 'api',
       sourceNodeCount: main.visible,
       missingNodeIds: main.missing,
+      missingKinds: main.missingKinds,
       skipped: main.skipped,
       // Clicked while the answer was still being written (seen on a real gpt-6-pro task, 2026-10).
       warnings: mapping[leafId]?.message?.status === 'in_progress' ? ['answer-in-progress'] : [],

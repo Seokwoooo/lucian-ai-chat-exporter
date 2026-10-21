@@ -4,7 +4,7 @@
 // roots so the site's styles and ours never mix, and the button is re-added if the site re-renders
 // its toolbar. The page's own controls are never moved or changed.
 
-import { checkText } from '../export/report';
+import { checkText, issuesFirst, shownLevel, shownStatus } from '../export/report';
 import { detectLocale, formatBytes, t, type Locale, type MessageKey } from '../shared/i18n';
 import type { ExportFormat, JobKind, JobState, MdImageMode } from '../shared/types';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
@@ -118,7 +118,7 @@ button:disabled { opacity: .45; cursor: default; }
 .status .title { font-weight: 600; }
 .status .sub { color: var(--muted); font-size: 12px; }
 .status ul { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
-.status .actions { margin-top: 6px; display: flex; gap: 6px; }
+.status .actions { margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
 .status .choices { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .status[data-level="choose"] .ic { color: var(--text); }
 ${MD_CHOICE_CSS}
@@ -126,6 +126,12 @@ ${mdChoiceDarkCss('.panel.dark')}
 .status .bar { margin-top: 7px; height: 4px; border-radius: 999px; background: var(--surface-hover); overflow: hidden; }
 .status .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7c5cff, #22d3ee); transition: width .25s ease; }
 .link { all: unset; color: var(--text); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.status ul.checks { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow: auto; }
+.checks li { display: flex; gap: 6px; line-height: 1.45; }
+.checks .ci { flex: none; width: 12px; text-align: center; font-weight: 700; }
+.checks li[data-s="pass"] .ci { color: var(--ok); }
+.checks li[data-s="warn"] .ci { color: var(--warn); }
+.checks li[data-s="warn"] { color: var(--text); }
 .status .ic.spinning { animation: r 0.9s linear infinite; will-change: transform; }
 @keyframes r { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .status .ic.spinning { animation: none; } }
@@ -157,6 +163,8 @@ export function initPageUi(adapter: SiteAdapter): void {
   let job: JobState | null = null;
   let polling: ReturnType<typeof setTimeout> | null = null;
   let moreOpen = false;
+  // Id of the finished handoff whose details list is open (a new job starts collapsed).
+  let infoFor: string | null = null;
 
   // ---------- panel (one per page, created on first use) ----------
   let panelHost: HTMLElement | null = null;
@@ -276,7 +284,7 @@ export function initPageUi(adapter: SiteAdapter): void {
       sub = tr(k) === k ? tr('error.UNKNOWN') : tr(k);
     } else {
       const v = job.result?.verification;
-      const level = v?.level ?? 'ok';
+      const level = shownLevel(job);
       box.dataset.level = job.phase === 'print' && !v ? '' : level;
       icon = job.phase === 'print' && !v ? ICON.spin.replace('class="spin"', '') : level === 'ok' ? ICON.ok : level === 'warning' ? ICON.warn : ICON.err;
       iconKind = job.phase === 'print' && !v ? 'print' : level;
@@ -289,9 +297,26 @@ export function initPageUi(adapter: SiteAdapter): void {
       if (hs) parts.push(tr('result.tokens', { src: hs.sourceTokens.toLocaleString(), out: hs.outputTokens.toLocaleString() }));
       else if (job.result?.bytes) parts.push(formatBytes(job.result.bytes));
       sub = parts.join(' · ');
-      const issues = (v?.checks ?? []).filter((c) => c.status === 'warn' || c.status === 'fail').slice(0, 4);
-      if (issues.length) extra += `<ul>${issues.map((c) => `<li>${escapeText(checkText(locale, c))}</li>`).join('')}</ul>`;
-      if (job.result?.downloadId != null) extra += `<div class="actions"><button type="button" class="link" data-act="show">${escapeText(tr('result.openFile'))}</button></div>`;
+      const actions: string[] = [];
+      if (job.kind === 'handoff') {
+        // A saved handoff reads as saved (v1.3.8): what went wrong waits under "details".
+        const open = infoFor === job.id;
+        if (v?.checks.length) actions.push(`<button type="button" class="link" data-act="info" aria-expanded="${open}">${escapeText(tr(open ? 'result.hideInfo' : 'result.info'))}</button>`);
+        if (job.result?.downloadId != null) actions.push(`<button type="button" class="link" data-act="show">${escapeText(tr('result.openFile'))}</button>`);
+        if (actions.length) extra += `<div class="actions">${actions.join('')}</div>`;
+        if (open && v?.checks.length) {
+          extra += `<ul class="checks">${issuesFirst(v.checks)
+            .map((c) => {
+              const st = shownStatus(job!.kind, c);
+              return `<li data-s="${st}"><span class="ci">${st === 'pass' ? '✓' : st === 'warn' ? '!' : '·'}</span><span>${escapeText(checkText(locale, c))}</span></li>`;
+            })
+            .join('')}</ul>`;
+        }
+      } else {
+        const issues = (v?.checks ?? []).filter((c) => c.status === 'warn' || c.status === 'fail').slice(0, 4);
+        if (issues.length) extra += `<ul>${issues.map((c) => `<li>${escapeText(checkText(locale, c))}</li>`).join('')}</ul>`;
+        if (job.result?.downloadId != null) extra += `<div class="actions"><button type="button" class="link" data-act="show">${escapeText(tr('result.openFile'))}</button></div>`;
+      }
     }
     if (job.phase === 'error' && job.error?.code !== 'NOT_SUPPORTED' && job.error?.code !== 'NOT_CONVERSATION') {
       extra += `<div class="actions"><button type="button" class="link" data-act="retry">${escapeText(tr('result.retry'))}</button></div>`;
@@ -462,6 +487,11 @@ export function initPageUi(adapter: SiteAdapter): void {
       panel?.querySelector<HTMLButtonElement>('.more')?.focus({ preventScroll: true });
     } else if (act === 'close') {
       closePanel(true);
+    } else if (act === 'info' && job) {
+      infoFor = infoFor === job.id ? null : job.id;
+      renderStatus();
+      position();
+      panel?.querySelector<HTMLButtonElement>('[data-act="info"]')?.focus({ preventScroll: true });
     } else if (act === 'show' && job?.result?.downloadId != null) {
       void chrome.runtime.sendMessage({ type: 'show-download', downloadId: job.result.downloadId });
     } else if (act === 'retry' && lastAction) {
@@ -482,7 +512,7 @@ export function initPageUi(adapter: SiteAdapter): void {
     const box = document.createElement('div');
     box.className = `toast panel open${isDarkPage() ? ' dark' : ''}`;
     box.style.cssText = 'left:auto;top:auto;width:auto;padding:10px 12px';
-    const level = j.phase === 'error' ? 'error' : j.result?.verification.level ?? 'ok';
+    const level = shownLevel(j);
     const icon = level === 'ok' ? ICON.ok : level === 'warning' ? ICON.warn : ICON.err;
     const fmtName = j.format ? tr(`format.${j.format}` as MessageKey) : 'Markdown';
     const text =
@@ -536,7 +566,15 @@ export function initPageUi(adapter: SiteAdapter): void {
     for (const type of ['pointerdown', 'mousedown', 'keydown']) host.addEventListener(type, (e) => e.stopPropagation());
     shadow.append(style, btn);
     triggers.add(btn);
-    bar.appendChild(host);
+    // Right after the site's own buttons; never moves or changes them.
+    let before: Element | null;
+    try {
+      before = adapter.actionAnchor?.(bar) ?? null;
+    } catch {
+      before = null;
+    }
+    if (before?.parentElement === bar) bar.insertBefore(host, before);
+    else bar.appendChild(host);
   };
 
   let scheduled: ReturnType<typeof setTimeout> | null = null;

@@ -1,6 +1,7 @@
 // HWPX section0.xml writer: paragraphs, runs, hyperlink fields, tables and pictures.
 
 import { attachmentName, t, formatBytes, type Locale } from '../../shared/i18n';
+import { sourceDomain } from '../../shared/sites';
 import type { Conversation, ExportContent, ExportMessage } from '../../shared/types';
 import { escapeXml, formatDateTime } from '../../shared/util';
 import { EMBEDDABLE, fitSize, type ImageStore } from '../images';
@@ -499,10 +500,9 @@ export class SectionWriter {
   documentHead(conv: Conversation, exportedAt: number): void {
     const L = this.locale;
     const meta = [
-      `${t(L, 'doc.source')}: ${conv.siteName}`,
+      `${t(L, 'doc.source')}: ${sourceDomain(conv)}`,
       `${t(L, 'doc.exportedAt')}: ${formatDateTime(exportedAt)}`,
       `${t(L, 'doc.messages')}: ${conv.messages.length}`,
-      conv.model ? `${t(L, 'doc.model')}: ${conv.model}` : '',
     ].filter(Boolean);
     this.push(this.paragraph([this.textRun(conv.title || conv.siteName, { bold: true, height: 1800 })], this.reg.para({ next: 300, align: 'LEFT' })));
     this.push(this.paragraph([this.textRun(meta.join('   ·   '), { color: MUTED, height: 900 })], this.reg.para({ next: 100, align: 'LEFT' })));

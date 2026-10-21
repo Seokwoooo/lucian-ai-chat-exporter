@@ -6,7 +6,7 @@ import { detectLocale, formatBytes, formatMs, t, type Locale, type MessageKey } 
 import { jobStorageKey } from '../shared/messages';
 import { SITES, detectSite, extractConversationId } from '../shared/sites';
 import type { ExportFormat, JobKind, JobState, MdImageMode, VerificationCheck } from '../shared/types';
-import { checkText } from '../export/report';
+import { checkText, issuesFirst, shownLevel, shownStatus } from '../export/report';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
 import { FORMAT_LOGOS, IMAGE_ICON, MD_CHOICE_CSS, mdChoiceDarkCss, mdChoiceHtml } from '../shared/ui-icons';
 
@@ -303,7 +303,7 @@ function render(job: JobState | null): void {
     retry.textContent = t(locale, 'result.retry');
   } else {
     const v = job.result?.verification;
-    const level = v?.level ?? 'ok';
+    const level = shownLevel(job);
     box.dataset.level = job.phase === 'print' && !v ? '' : level;
     setIcon(icon, job.phase === 'print' ? 'print' : level === 'ok' ? 'ok' : level === 'warning' ? 'warn' : 'err');
     if (job.phase === 'print') {
@@ -324,13 +324,15 @@ function render(job: JobState | null): void {
     if (job.result?.bytes) parts.push(formatBytes(job.result.bytes));
     sub.textContent = parts.join(' · ');
     if (v?.checks.length) {
+      // A handoff names its toggle "details" and lists its gaps first (v1.3.8).
+      const handoff = job.kind === 'handoff';
       details.hidden = false;
-      details.textContent = t(locale, showDetails ? 'result.hideDetails' : 'result.details');
+      details.textContent = t(locale, handoff ? (showDetails ? 'result.hideInfo' : 'result.info') : showDetails ? 'result.hideDetails' : 'result.details');
       details.setAttribute('aria-expanded', String(showDetails));
       if (showDetails) {
         checks.hidden = false;
         checks.innerHTML = '';
-        for (const c of v.checks) checks.appendChild(checkItem(c));
+        for (const c of handoff ? issuesFirst(v.checks) : v.checks) checks.appendChild(checkItem(c, shownStatus(job.kind, c)));
       }
     }
     if (job.result?.downloadId != null) {
@@ -354,12 +356,12 @@ function render(job: JobState | null): void {
   setEnabled(enabled);
 }
 
-function checkItem(c: VerificationCheck): HTMLLIElement {
+function checkItem(c: VerificationCheck, status = c.status): HTMLLIElement {
   const li = document.createElement('li');
-  li.dataset.s = c.status;
+  li.dataset.s = status;
   const icon = document.createElement('span');
   icon.className = 'ci';
-  icon.textContent = c.status === 'pass' ? '✓' : c.status === 'warn' ? '!' : c.status === 'fail' ? '✗' : '·';
+  icon.textContent = status === 'pass' ? '✓' : status === 'warn' ? '!' : status === 'fail' ? '✗' : '·';
   const span = document.createElement('span');
   span.textContent = checkText(locale, c);
   li.append(icon, span);

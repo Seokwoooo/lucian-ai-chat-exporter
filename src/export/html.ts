@@ -3,6 +3,7 @@
 // output shows exactly what the chat showed and never executes page content.
 
 import { attachmentName, t, formatBytes, type Locale } from '../shared/i18n';
+import { sourceDomain } from '../shared/sites';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { escapeHtml, formatDateTime } from '../shared/util';
 import { messageHeaderText, roleLabel, toolDocText } from './markdown';
@@ -342,10 +343,9 @@ export function renderConversationBody(conv: Conversation, env: HtmlEnv, exporte
   const ctx: Ctx = { env, stats };
   const L = env.locale;
   const meta = [
-    `<span>${escapeHtml(t(L, 'doc.source'))}: <a href="${attr(conv.fromUrl)}">${escapeHtml(conv.siteName)}</a></span>`,
+    `<span>${escapeHtml(t(L, 'doc.source'))}: <a href="${attr(conv.fromUrl)}">${escapeHtml(sourceDomain(conv))}</a></span>`,
     `<span>${escapeHtml(t(L, 'doc.exportedAt'))}: ${escapeHtml(formatDateTime(exportedAt))}</span>`,
     `<span>${escapeHtml(t(L, 'doc.messages'))}: ${conv.messages.length}</span>`,
-    conv.model ? `<span>${escapeHtml(t(L, 'doc.model'))}: ${escapeHtml(conv.model)}</span>` : '',
   ].join('');
   let html = `<header class="doc-head"><h1>${escapeHtml(conv.title || conv.siteName)}</h1><div class="doc-meta">${meta}</div></header>\n`;
   conv.messages.forEach((m, i) => {

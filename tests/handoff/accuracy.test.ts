@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { handoffBudget, runHandoff } from '../../src/handoff/engine';
+import { fullExportTokens, handoffBudget, runHandoff, type HandoffOptions } from '../../src/handoff/engine';
 import { ANAPHOR_RE, clipText, extractPaths } from '../../src/handoff/patterns';
 import { verifyHandoffMarkdown } from '../../src/handoff/render';
 import { conv as makeConv, englishScenario, koreanScenario, msg, researchScenario, unrelatedChangeScenario } from '../fixtures/handoff-scenarios';
 import { parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
-import { CHATGPT_ID, chatgptConversation } from '../fixtures/sites';
+import { CHATGPT_ID, GROK_ID, chatgptConversation, grokPayloads } from '../fixtures/sites';
+import { parseGrokConversation } from '../../src/content/adapters/grok';
 import { estimateTokens } from '../../src/shared/util';
 
 /**
@@ -27,6 +28,12 @@ const OPEN = '미완료 작업';
 const NEXT = '다음에 이어서 할 작업';
 const FAIL = '이전 시도에서 실패한 원인';
 const CUR = '현재 진행 상황';
+
+/**
+ * The section logic on a short fixture: the sectioned form at a long chat's budget. Short chats
+ * get the condensed form by default (v1.3.8), so tests of the sections ask for them explicitly.
+ */
+const SECTIONS: HandoffOptions = { budgetTokens: 8_000, layout: { sectionsFrom: 0, recentShare: 0.5 } };
 
 function subsection(text: string, prefix: string): string {
   const start = text.indexOf(`\n### ${prefix}`);
@@ -137,15 +144,23 @@ describe('handoff accuracy — English scenario (REST → GraphQL)', () => {
 });
 
 describe('handoff accuracy — keyword overlap alone does not change decisions', () => {
-  const r = runHandoff(unrelatedChangeScenario());
+  const r = runHandoff(unrelatedChangeScenario(), SECTIONS);
   const decisions = section(r.markdown, DEC);
   it('keeps PostgreSQL active after an unrelated "change" request', () => {
     expect(decisions.split('### ')[0]).toMatch(/PostgreSQL로 결정/);
     expect(decisions).not.toMatch(/변경되거나 폐기된/);
   });
-  it('uses full mode for a short conversation', () => {
-    expect(r.stats.mode).toBe('full');
-    expect(r.markdown).toMatch(/## \d+\. 전체 대화 원문/);
+  it('condenses a short conversation to its key sentences, within 2/3 of the full export (v1.3.8)', () => {
+    const c = unrelatedChangeScenario();
+    const short = runHandoff(c, { now: 0 });
+    expect(short.stats.mode).toBe('condensed');
+    expect(short.markdown).toMatch(/^## 대화 원문 \(핵심 문장만\)$/m);
+    expect(short.markdown).not.toMatch(/전체 대화 원문/);
+    expect(short.stats.sourceTokens).toBe(fullExportTokens(c, 0));
+    expect(estimateTokens(short.markdown)).toBeLessThanOrEqual(Math.floor(short.stats.sourceTokens * (2 / 3) * 1.02));
+    // A four-message chat of ~170 tokens: a short note and the latest exchange fit.
+    expect(short.markdown).toContain('버튼 색상은 파란색 대신 초록색으로 바꿔 주세요.');
+    expect(short.markdown).toContain('마지막 요청부터 이어서 답하세요');
   });
 });
 
@@ -167,21 +182,23 @@ describe('handoff — hidden reasoning', () => {
     const conv = parseChatGPTConversation(chatgptConversation(), { conversationId: CHATGPT_ID, url: `https://chatgpt.com/c/${CHATGPT_ID}` });
     const thinking = conv.messages[1].contents.find((c) => c.type === 'thinking')?.content ?? '';
     expect(thinking.length).toBeGreaterThan(0);
-    const { markdown } = runHandoff(conv);
-    for (const line of thinking.split('\n').map((l) => l.replace(/[*#]/g, '').trim()).filter((l) => l.length > 4)) {
-      expect(markdown).not.toContain(line);
+    for (const opts of [{}, SECTIONS]) {
+      const { markdown } = runHandoff(conv, opts);
+      for (const line of thinking.split('\n').map((l) => l.replace(/[*#]/g, '').trim()).filter((l) => l.length > 4)) {
+        expect(markdown).not.toContain(line);
+      }
+      // The visible answer text is what the transcript shows.
+      expect(markdown).toMatch(/### \[#m2\] ChatGPT[\s\S]*?원인은 `user`가/);
+      expect(markdown).not.toMatch(/## 부록/);
     }
-    // Short conversation: everything is in the transcript, which shows the visible answer text.
-    expect(markdown).toMatch(/### \[#m2\] ChatGPT[\s\S]*?원인은 `user`가/);
-    expect(markdown).not.toMatch(/## 부록/);
   });
 });
 
 describe('handoff noise control — web-search research chat (user report, 2026-10)', () => {
-  const r = runHandoff(researchScenario(), { now: Date.UTC(2026, 9, 16) });
+  const r = runHandoff(researchScenario(), { now: Date.UTC(2026, 9, 16), ...SECTIONS });
   const md = r.markdown;
-  const transcript = md.slice(md.search(/\n## \d+\. 전체 대화 원문/));
-  const structured = md.slice(0, md.search(/\n## \d+\. 전체 대화 원문/));
+  const transcript = md.slice(md.search(/\n## \d+\. 최근 대화 원문/));
+  const structured = md.slice(0, md.search(/\n## \d+\. 최근 대화 원문/));
 
   it('drops uncited search results and source lists', () => {
     expect(md).not.toContain('search0.example');
@@ -212,6 +229,9 @@ describe('handoff noise control — web-search research chat (user report, 2026-
     expect(transcript).toMatch(/^#### 재배포 조건에 대한 라이선스 조사/m);
     expect(md).not.toContain('해당 내용을 찾지 못했습니다');
     expect(section(md, '확정된 주요 결정')).toBe('');
+    // The reader instructions only name sections the document has (v1.3.8).
+    expect(md).not.toContain('「확정된 주요 결정」');
+    expect(md).not.toMatch(/^> \d+\. ⚠️/m);
   });
 
   it('lists the request flow, the open problem and the stated next step', () => {
@@ -220,10 +240,7 @@ describe('handoff noise control — web-search research chat (user report, 2026-
     expect(goal).toMatch(/라이선스 조건 찾아서 제대로 정리해줘 \[#m5\]/);
     expect(section(md, '미완료 작업')).toMatch(/실제 약관 원문은 확보하지 못했습니다/);
     expect(section(md, '다음에 이어서 할 작업')).toMatch(/남은 핵심은 저작권 표시 조건의 실제 원문 확인입니다/);
-    // The whole conversation follows, so "current state" points to the last answer instead of
-    // copying its sentences (v1.3.4); the answer itself is in the transcript.
-    expect(section(md, '현재 진행 상황')).toMatch(/마지막 AI 응답 \[#m6\]: 아래 대화 원문에 전체가 있습니다/);
-    expect(section(md, '현재 진행 상황')).not.toMatch(/먼저 결론부터 말씀드리면/);
+    expect(section(md, '현재 진행 상황')).toMatch(/먼저 결론부터 말씀드리면/);
     expect(transcript).toMatch(/먼저 결론부터 말씀드리면/);
     // Advice ("~확인해야 합니다") and descriptions of other projects are not the user's tasks.
     expect(section(md, '미완료 작업')).not.toMatch(/동기화 제한도 확인해야 합니다/);
@@ -352,12 +369,16 @@ describe('handoff — decisions, rejections and budget (QA evaluation, 2026-10)'
 
 describe('handoff structure check (verification report)', () => {
   it('accepts every scenario in both languages and modes, and rejects a broken document', () => {
-    for (const c of [koreanScenario(), englishScenario(), unrelatedChangeScenario(), researchScenario()]) {
-      const r = runHandoff(c, { now: Date.UTC(2026, 9, 16) });
-      expect(verifyHandoffMarkdown(r.markdown, r.lang), `${c.title} (${r.stats.mode}, ${r.lang})`).toEqual({ ok: true });
+    for (const c of [koreanScenario(), englishScenario(), unrelatedChangeScenario(), researchScenario(), koreanScenario(2), englishScenario(2)]) {
+      for (const opts of [{}, SECTIONS]) {
+        const r = runHandoff(c, { now: Date.UTC(2026, 9, 16), ...opts });
+        expect(verifyHandoffMarkdown(r.markdown, r.lang), `${c.title} (${r.stats.mode}, ${r.lang})`).toEqual({ ok: true });
+      }
     }
-    const md = runHandoff(researchScenario()).markdown;
+    const md = runHandoff(researchScenario(), SECTIONS).markdown;
     expect(verifyHandoffMarkdown(md.replace(/^## \d+\. 현재 진행 상황.*$/m, ''), 'ko').ok).toBe(false);
+    const condensed = runHandoff(researchScenario()).markdown;
+    expect(verifyHandoffMarkdown(condensed.replace(/\[#m\d+\]/g, ''), 'ko').ok).toBe(false);
   });
 });
 
@@ -371,10 +392,17 @@ describe('files and images from a real ChatGPT handoff (v1.3.2)', () => {
     const user = msg('user', '이 주스는 원액 함량이 낮은데 괜찮은 제품인가요?');
     user.contents.push({ type: 'image', imageUrl: 'https://chatgpt.com/backend-api/estuary/content?id=file_0001&fn=IMG_0001.jpeg&sig=abc123', alt: '이미지' });
     const answer = msg('assistant', '표시 기준으로 보면 원액 함량이 낮은 편입니다.\n\n![성분표](https://files.example.com/u/label.png?token=secret)');
-    const md = runHandoff(makeConv([user, answer]), { now: 0 }).markdown;
+    const md = runHandoff(makeConv([user, answer]), { now: 0, ...SECTIONS }).markdown;
     expect(md).toContain('[이미지: IMG_0001.jpeg]');
     expect(md).toContain('[이미지: label.png]');
     expect(md).not.toMatch(/estuary|sig=|token=secret/);
+    // The condensed form names images the same way (here with room for the whole chat).
+    const condensed = runHandoff(makeConv([user, answer]), { now: 0, budgetTokens: 3_000 }).markdown;
+    expect(condensed).toMatch(/^## 대화 원문 \(핵심 문장만\)$/m);
+    expect(condensed).toContain('[이미지: IMG_0001.jpeg]');
+    expect(condensed).toContain('[이미지: label.png]');
+    expect(condensed).not.toMatch(/estuary|sig=|token=secret/);
+    expect(runHandoff(makeConv([user, answer]), { now: 0 }).markdown).not.toMatch(/estuary|sig=|token=secret/);
   });
 });
 
@@ -417,14 +445,18 @@ describe('last answer with nothing visible yet (v1.3.3)', () => {
   it('tells the next AI to start from the last request instead of showing an empty answer', () => {
     const answer = msg('assistant', '');
     answer.contents = [{ type: 'thinking', content: '목차부터 다시 정리한다.' }];
-    const md = runHandoff(makeConv([msg('user', '보고서를 정리해 주세요.'), msg('assistant', '정리했습니다.'), msg('user', '보고서 전체를 다시 정리해 주세요.'), answer]), { now: 0 }).markdown;
+    const c = makeConv([msg('user', '보고서를 정리해 주세요.'), msg('assistant', '정리했습니다.'), msg('user', '보고서 전체를 다시 정리해 주세요.'), answer]);
+    const md = runHandoff(c, { now: 0, ...SECTIONS }).markdown;
     expect(section(md, '현재 진행 상황')).toMatch(/마지막 AI 응답 \[#m4\]에는 보이는 내용이 없습니다/);
     expect(md).toContain('_(보이는 내용 없음)_');
     expect(md).not.toContain('_(empty)_');
+    // The condensed form shows the empty answer under its header, after the request to handle.
+    const condensed = runHandoff(c, { now: 0 }).markdown;
+    expect(condensed).toMatch(/### \[#m3\] 사용자\n\n보고서 전체를 다시 정리해 주세요\.\n\n### \[#m4\] ChatGPT\n\n_\(보이는 내용 없음\)_/);
   });
 });
 
-describe('revised drafts and the full-transcript index (v1.3.4)', () => {
+describe('revised drafts (v1.3.4) in the transcript and in the condensed form', () => {
   const body = [
     '봄맞이 신제품 출시를 알리는 첫 문장입니다. 새로운 텀블러가 오늘부터 판매됩니다.',
     '',
@@ -445,15 +477,16 @@ describe('revised drafts and the full-transcript index (v1.3.4)', () => {
     msg('user', '용량 옵션 추가해서 다시'),
     msg('assistant', draft(v3)),
   ]);
-  const r = runHandoff(c, { now: 0 });
+  const r = runHandoff(c, { now: 0, ...SECTIONS });
   const md = r.markdown;
-  const transcript = md.slice(md.search(/\n## \d+\. 전체 대화 원문/));
+  const transcript = md.slice(md.search(/\n## \d+\. 최근 대화 원문/));
   const count = (s: string, sub: string) => s.split(sub).length - 1;
 
   it('shows each repeated draft line once, in the latest draft', () => {
-    expect(r.stats.mode).toBe('full');
+    expect(transcript).toContain('### [#m2] ChatGPT');
     expect(count(transcript, '이중 진공 구조로 만들었습니다')).toBe(1);
-    expect(count(transcript, '이벤트는 이번 주 일요일까지')).toBe(1);
+    // A run of one short line stays: the note would be longer than the line (v1.3.8).
+    expect(count(transcript, '이벤트는 이번 주 일요일까지')).toBe(3);
     expect(transcript).toMatch(/_\(… \d+줄 생략 — 같거나 거의 같은 내용이 아래 \[#m6\]에 있습니다\)_/);
     // The latest draft is complete.
     const last = transcript.slice(transcript.lastIndexOf('[#m6]'));
@@ -467,27 +500,41 @@ describe('revised drafts and the full-transcript index (v1.3.4)', () => {
 
   it('never collapses what the user wrote into an AI reply', () => {
     const paste = '이번 시즌 메시지는 "가볍게 들고 다니는 하루"로 정했고, 이 문장은 꼭 그대로 써 주세요.';
-    const md2 = runHandoff(makeConv([msg('user', `${paste}\n이 문장으로 초안 써줘`), msg('assistant', `${paste}\n\n초안을 썼습니다.`)]), { now: 0 }).markdown;
-    const t2 = md2.slice(md2.search(/\n## \d+\. 전체 대화 원문/));
+    const md2 = runHandoff(makeConv([msg('user', `${paste}\n이 문장으로 초안 써줘`), msg('assistant', `${paste}\n\n초안을 썼습니다.`)]), { now: 0, ...SECTIONS }).markdown;
+    const t2 = md2.slice(md2.search(/\n## \d+\. 최근 대화 원문/));
     expect(count(t2, paste)).toBe(2);
     expect(t2).not.toContain('줄 생략 — 같거나');
   });
 
   it('keeps the transcript unchanged with the v1.2 layout', () => {
-    const old = runHandoff(c, { now: 0, layout: { collapseRepeats: false, fullIndex: false } }).markdown;
+    const old = runHandoff(c, { now: 0, ...SECTIONS, layout: { ...SECTIONS.layout, collapseRepeats: false } }).markdown;
     expect(count(old, '이중 진공 구조로 만들었습니다')).toBeGreaterThanOrEqual(3);
     expect(estimateTokens(md)).toBeLessThan(estimateTokens(old));
   });
 
-  it('keeps the sections a short index when the whole conversation follows', () => {
-    const goal = section(md, '목표와 요청 흐름');
-    expect(goal).not.toContain('답변 요지');
-    expect(section(md, '현재 진행 상황')).toMatch(/마지막 AI 응답 \[#m6\]: 아래 대화 원문에 전체가 있습니다/);
-    const long = `${'이번 캠페인의 문구 원칙을 정리합니다. '.repeat(20)}마지막으로 해시태그는 세 개까지만.`;
-    const md3 = runHandoff(makeConv([msg('user', '초안 써줘'), msg('assistant', '초안입니다.'), msg('user', long), msg('assistant', '반영했습니다.')]), { now: 0 }).markdown;
-    const req = section(md3, '현재 진행 상황').split('\n').filter((l) => l.startsWith('> '));
-    expect(req.join('\n').length).toBeLessThan(260);
-    expect(md3).not.toContain('To the AI reading this');
+  it('shows each draft line once in the condensed form too, and stays within 2/3 of the full export', () => {
+    const short = runHandoff(c, { now: 0 });
+    expect(short.stats.mode).toBe('condensed');
+    expect(count(short.markdown, '이중 진공 구조로 만들었습니다')).toBeLessThanOrEqual(1);
+    expect(short.markdown).toContain('용량 옵션 추가해서 다시');
+    expect(estimateTokens(short.markdown)).toBeLessThanOrEqual(Math.floor(short.stats.sourceTokens * (2 / 3) * 1.02));
+  });
+
+  it('keeps every row of a table, and a run of repeated lines when the note would be longer (v1.3.8)', () => {
+    const table = '| 순위 | 결과 | 확률 |\n|---|---|---|\n| 1 | 10월 31일까지 안 나옴 | 21% |\n| 2 | 10월 20일 | 20% |';
+    const tc = makeConv([
+      msg('user', '지금 어디가 제일 높아?'),
+      msg('assistant', `정확한 날짜 시장 기준으로는 이렇습니다.\n\n${table}\n\n짧은 줄`),
+      msg('user', '지금은 바뀌었어?'),
+      msg('assistant', `정확한 날짜 시장 기준으로는 이렇습니다.\n\n${table.replace('21%', '18%').replace('20%', '27%')}\n\n짧은 줄`),
+    ]);
+    const t = runHandoff(tc, { now: 0, ...SECTIONS }).markdown;
+    const first = t.slice(t.indexOf('### [#m2]'), t.indexOf('### [#m3]'));
+    // The header row is repeated in [#m4] but stays: a table without it is no table.
+    expect(first).toContain('| 순위 | 결과 | 확률 |\n|---|---|---|');
+    // One repeated short sentence: the note would be longer than the line, so the line stays.
+    expect(first).toContain('정확한 날짜 시장 기준으로는 이렇습니다.');
+    expect(first).not.toContain('줄 생략');
   });
 });
 
@@ -555,16 +602,35 @@ describe('attachments and pasted text (v1.3.5)', () => {
   it('English counts agree with one attachment', () => {
     const one = msg('user', 'Please review the attached memo and tell me what to change.');
     one.contents.push({ type: 'attachment', attachment: { name: 'memo.txt', mime_type: 'text/plain', extractedText: 'Memo: lead with the conclusion, keep the evidence to three lines.' } });
-    const md = runHandoff(makeConv([one, msg('assistant', 'I reviewed the memo. Move the conclusion to the first line.')]), { now: 0 }).markdown;
+    const md = runHandoff(makeConv([one, msg('assistant', 'I reviewed the memo. Move the conclusion to the first line.')]), { now: 0, ...SECTIONS }).markdown;
     expect(md).toContain('(1 attachment: memo.txt');
     expect(md).not.toContain('1 attachments');
   });
 
-  it('only lists attachments when the whole conversation follows, and leaves them out with the v1.2 layout', () => {
-    const short = runHandoff(makeConv([first, msg('assistant', '좋은 메모입니다.')]), { now: 0 });
-    expect(short.stats.mode).toBe('full');
-    expect(section(short.markdown, '첨부 자료').trim().split('\n').slice(1).filter(Boolean)).toEqual([expect.stringMatching(/^- 붙여넣은 텍스트 · txt · 약 \d+토큰 \[#m1\]$/)]);
-    expect(section(short.markdown, '목표와 요청 흐름')).toContain('(첨부 1개: 붙여넣은 텍스트 — 아래 대화 원문 [#m1]) [#m1]');
+  it('keeps attached text in the condensed form of a short chat, and leaves it out with the v1.2 layout', () => {
+    const short = runHandoff(makeConv([first, msg('assistant', '좋은 메모입니다. 바람길을 먼저 보는 점이 특히 실용적입니다.')]), { now: 0 });
+    expect(short.stats.mode).toBe('condensed');
+    expect(short.markdown).toContain('아래 메모 어떻게 생각해?');
+    expect(thought.split('\n').filter((l) => short.markdown.includes(l)).length).toBeGreaterThanOrEqual(1);
     expect(runHandoff(c, { now: 0, layout: { attachShare: 0 } }).markdown).not.toContain('첨부 자료');
+  });
+});
+
+describe('source row shows the site address, not the model (v1.3.8)', () => {
+  it('grok.com and chatgpt.com, without model slugs', () => {
+    const p = grokPayloads();
+    const grok = parseGrokConversation({ conversationId: GROK_ID, url: `https://grok.com/c/${GROK_ID}`, title: p.detail.conversation.title, nodes: p.nodes.responseNodes, responses: p.responses.responses });
+    const g = runHandoff(grok, { now: 0, ...SECTIONS }).markdown;
+    expect(g).toContain('| 원본 서비스 | grok.com |');
+    expect(g).not.toContain('grok-test');
+    const gc = runHandoff(grok, { now: 0, budgetTokens: 3_000 }).markdown;
+    expect(gc).toContain('원본 [grok.com](https://grok.com/c/');
+    expect(gc).not.toContain('grok-test');
+    expect(runHandoff(grok, { now: 0 }).markdown).not.toContain('grok-test');
+    const conv = parseChatGPTConversation(chatgptConversation(), { conversationId: CHATGPT_ID, url: `https://chatgpt.com/c/${CHATGPT_ID}` });
+    const c = runHandoff(conv, { now: 0, ...SECTIONS }).markdown;
+    expect(c).toContain('| 원본 서비스 | chatgpt.com |');
+    expect(c).not.toContain('gpt-5');
+    expect(runHandoff(conv, { now: 0 }).markdown).not.toContain('gpt-5');
   });
 });

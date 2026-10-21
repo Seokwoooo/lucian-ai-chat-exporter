@@ -155,8 +155,10 @@ export function geminiPage(cursor: string | null): string {
 
 export function grokPayloads() {
   const iso = (min: number) => new Date(t(min) * 1000).toISOString();
+  // grok.com (checked 2026-10-21 on 20 real conversations): the first question's parent is an empty
+  // "system" response that response-node does not list; load-responses still returns it if asked.
   const nodes = [
-    { responseId: 'g-u1', sender: 'human' },
+    { responseId: 'g-u1', sender: 'human', parentResponseId: 'g-system-root' },
     { responseId: 'g-a1', sender: 'assistant', parentResponseId: 'g-u1' },
     { responseId: 'g-u2', sender: 'human', parentResponseId: 'g-a1' },
     { responseId: 'g-a2-old', sender: 'assistant', parentResponseId: 'g-u2' },
@@ -164,7 +166,8 @@ export function grokPayloads() {
     { responseId: 'g-a3-partial', sender: 'assistant', parentResponseId: 'g-a2' },
   ];
   const responses = [
-    { responseId: 'g-u1', sender: 'human', message: '오늘 날씨 API를 추천해줘', createTime: iso(0) },
+    { responseId: 'g-system-root', sender: 'system', message: '', createTime: iso(0) },
+    { responseId: 'g-u1', sender: 'human', parentResponseId: 'g-system-root', message: '오늘 날씨 API를 추천해줘', createTime: iso(0) },
     {
       responseId: 'g-a1',
       sender: 'assistant',

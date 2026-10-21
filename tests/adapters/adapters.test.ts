@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { conversationToMarkdown } from '../../src/export/markdown';
 import { buildVerification } from '../../src/export/verify';
+import { checkText, issuesFirst, shownLevel, shownStatus } from '../../src/export/report';
+import type { JobState, VerificationCheck } from '../../src/shared/types';
 import { applyContentReferences, parseChatGPTConversation } from '../../src/content/adapters/chatgpt';
 import { parseClaudeConversation, selectClaudePath } from '../../src/content/adapters/claude';
 import { buildGeminiConversation, extractReadChatPage, parseBatchExecute } from '../../src/content/adapters/gemini';
 import { cleanGrokMarkdown, parseGrokConversation } from '../../src/content/adapters/grok';
-import { extractConversationId, detectSite } from '../../src/shared/sites';
-import { CHATGPT_ID, CLAUDE_ID, GEMINI_ID, GROK_ID, chatgptConversation, chatgptModernConversation, chatgptRichSearchConversation, claudeConversation, geminiPage, grokPayloads } from '../fixtures/sites';
+import { extractConversationId, detectSite, sourceDomain } from '../../src/shared/sites';
+import {
+  CHATGPT_ID,
+  CLAUDE_ID,
+  GEMINI_ID,
+  GROK_ID,
+  chatgptConversation,
+  chatgptModernConversation,
+  chatgptRichSearchConversation,
+  claudeConversation,
+  geminiPage,
+  grokPayloads,
+} from '../fixtures/sites';
 
 describe('site detection and conversation ids', () => {
   it('extracts ids from the supported URL shapes', () => {
@@ -20,6 +33,15 @@ describe('site detection and conversation ids', () => {
     expect(extractConversationId('grok', `https://grok.com/c/${GROK_ID}`)).toBe(GROK_ID);
     expect(detectSite('https://example.com')).toBeNull();
     expect(detectSite('https://chat.openai.com/c/x')).toBe('chatgpt');
+  });
+});
+
+describe('source address shown in documents (v1.3.8)', () => {
+  it('uses the page host and falls back to the service home', () => {
+    expect(sourceDomain({ site: 'grok', fromUrl: `https://grok.com/c/${GROK_ID}` })).toBe('grok.com');
+    expect(sourceDomain({ site: 'chatgpt', fromUrl: 'https://chat.openai.com/c/x' })).toBe('chat.openai.com');
+    expect(sourceDomain({ site: 'gemini', fromUrl: '' })).toBe('gemini.google.com');
+    expect(sourceDomain({ site: 'claude', fromUrl: 'https://evil.example/claude' })).toBe('claude.ai');
   });
 });
 
@@ -74,6 +96,7 @@ describe('ChatGPT adapter', () => {
     const md = a.contents.find((c) => c.type === 'markdown')!.content!;
     const outsideCode = md.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
     expect(outsideCode).not.toMatch(/<\/?(Cite|Link|MemoryCite|box|row|text|title|caption|icon|divider)\b/);
+    expect(md.startsWith('# 조사 결과\n')).toBe(true);
     expect(md).toContain('권장합니다.** 근거는 공식 문서입니다. ([example.org](https://example.org/one))');
     expect(md).toContain('| [예시 A](https://example.org/a) | 설명 ([docs.example.com](https://docs.example.com/guide), [example.net](https://www.example.net/page/)) |');
     expect(md).toContain('**무료 플랜 비교표**');
@@ -155,6 +178,40 @@ describe('Grok adapter', () => {
     expect(conv.otherBranchMessages?.[0].messages[0].id).toBe('g-a2-old');
   });
 
+  it('does not count the hidden system root above the first question as a lost message (grok.com, 2026-10)', () => {
+    const p = grokPayloads();
+    const conv = parseGrokConversation({ conversationId: GROK_ID, url: `https://grok.com/c/${GROK_ID}`, nodes: p.nodes.responseNodes, responses: p.responses.responses });
+    expect(conv.extraction.missingNodeIds).toEqual([]);
+    expect(conv.extraction.sourceNodeCount).toBe(4);
+    expect(conv.messages[0]).toMatchObject({ id: 'g-u1', role: 'user' });
+    expect(buildVerification(conv, 'handoff').checks.filter((c) => c.status === 'fail')).toEqual([]);
+  });
+
+  it('keeps an answer that failed on Grok\'s side as the notice grok.com shows (2026-10)', () => {
+    const iso = (min: number) => new Date(Date.UTC(2026, 8, 3, 15, min)).toISOString();
+    const conv = parseGrokConversation({
+      conversationId: GROK_ID,
+      url: '',
+      nodes: [
+        { responseId: 'e-u1', sender: 'human', parentResponseId: 'e-system' },
+        { responseId: 'e-a1', sender: 'assistant', parentResponseId: 'e-u1' },
+      ],
+      responses: [
+        { responseId: 'e-u1', sender: 'human', message: '트윗 하나 써 줘', createTime: iso(0) },
+        {
+          responseId: 'e-a1',
+          sender: 'assistant',
+          createTime: iso(1),
+          steps: [{ text: ['Thinking about your request'], tags: ['header'] }],
+          streamErrors: [{ message: 'This model is temporarily unavailable. Please try a different model.', modelNotAvailable: {}, severity: 'STREAM_ERROR_SEVERITY_NORMAL' }],
+        },
+      ],
+    });
+    expect(conv.extraction.missingNodeIds).toEqual([]);
+    expect(conv.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(conv.messages[1].contents).toEqual([{ type: 'markdown', content: '> **Grok error:** This model is temporarily unavailable. Please try a different model.' }]);
+  });
+
   it('removes unknown render tags', () => {
     expect(cleanGrokMarkdown('a<grok:render type="x"><argument name="y">1</argument></grok:render>b', [])).toBe('ab');
   });
@@ -182,5 +239,48 @@ describe('answer still being written when the user clicks (real gpt-6-pro task, 
     const checks = buildVerification(inProgress('finished_successfully'), 'md').checks;
     expect(checks).toContainEqual({ code: 'answer.empty', status: 'warn' });
     expect(buildVerification(parseChatGPTConversation(chatgptConversation(), { conversationId: CHATGPT_ID, url: '' }), 'md').checks.some((c) => c.code.startsWith('answer.'))).toBe(false);
+  });
+});
+
+describe('a message the adapter cannot read (v1.3.8)', () => {
+  it('ChatGPT: records what the message held and the details name it', () => {
+    const data = chatgptConversation() as { mapping: Record<string, { children: string[] }>; current_node: string };
+    data.mapping.a2.children = ['a3'];
+    data.mapping.a3 = { id: 'a3', parent: 'a2', children: [], message: { id: 'a3', author: { role: 'assistant' }, recipient: 'all', create_time: 1_790_000_110, content: { content_type: 'multimodal_text', parts: [{ content_type: 'future_widget', data: 1 }] } } } as never;
+    data.current_node = 'a3';
+    const conv = parseChatGPTConversation(data, { conversationId: CHATGPT_ID, url: '' });
+    expect(conv.extraction.missingNodeIds).toEqual(['a3']);
+    expect(conv.extraction.missingKinds).toEqual(['assistant:multimodal_text(future_widget)']);
+    const check = buildVerification(conv, 'handoff').checks.find((c) => c.code === 'messages.missing')!;
+    expect(checkText('ko', check)).toBe('원본 메시지 1개는 형식을 읽지 못해 문서에서 빠졌습니다 — AI 답변 · multimodal_text(future_widget)');
+    expect(checkText('en', check)).toBe('1 source message was left out: its format could not be read — AI answer · multimodal_text(future_widget)');
+  });
+
+  it('Claude: names the block types of the message', () => {
+    const data = claudeConversation() as { chat_messages: Array<{ uuid: string; content: unknown[] }> };
+    data.chat_messages.find((m) => m.uuid === 'c-a2')!.content = [{ type: 'voice_note', audio: 'x' }];
+    const conv = parseClaudeConversation(data, { conversationId: CLAUDE_ID, url: '' });
+    expect(conv.extraction.missingKinds).toEqual(['assistant:voice_note']);
+    // Older records without kinds keep the short sentence.
+    expect(checkText('ko', { code: 'messages.missing', status: 'fail', params: { missing: 2 } })).toBe('원본 메시지 2개는 형식을 읽지 못해 문서에서 빠졌습니다');
+  });
+});
+
+describe('result shown to the user (v1.3.8)', () => {
+  const fail: VerificationCheck = { code: 'messages.missing', status: 'fail', params: { missing: 1 } };
+  const pass: VerificationCheck = { code: 'download.ok', status: 'pass', params: { size: 10 } };
+  const job = (kind: JobState['kind'], phase: JobState['phase']) =>
+    ({ kind, phase, result: { filename: 'a.md', bytes: 10, verification: { level: 'error', checks: [pass, fail], counts: {} } } }) as unknown as JobState;
+
+  it('a saved handoff always reads as saved; its gaps are notes in the details', () => {
+    expect(shownLevel(job('handoff', 'done'))).toBe('ok');
+    expect(shownStatus('handoff', fail)).toBe('warn');
+    expect(issuesFirst([pass, fail])).toEqual([fail, pass]);
+  });
+
+  it('only a handoff that saved no file fails; exports keep their verification level', () => {
+    expect(shownLevel({ kind: 'handoff', phase: 'error' } as JobState)).toBe('error');
+    expect(shownLevel(job('export', 'done'))).toBe('error');
+    expect(shownStatus('export', fail)).toBe('fail');
   });
 });

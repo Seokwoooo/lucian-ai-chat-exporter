@@ -6,15 +6,17 @@
 // Only aggregate numbers are printed; `report.txt` with per-conversation details (it quotes the
 // conversations) is written into that folder. Never commit those files.
 //
-// Checks: message count, structure, budget, same result as a fresh local run (worker cache),
-// every excerpt traceable to the message it cites, links that exist in the conversation, file
-// list entries that look broken, and retention (compression-lab metrics) for compressed ones.
+// Checks: message count, structure, budget, size against the full export (v1.3.8: never larger;
+// by the engine's estimate and by o200k), same result as a fresh local run (worker cache), every
+// excerpt traceable to the message it cites, links that exist in the conversation, file list
+// entries that look broken, and retention (compression-lab metrics).
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { handoffBudget, runHandoff } from '../../src/handoff/engine';
+import { encode as o200k } from 'gpt-tokenizer/encoding/o200k_base';
+import { fullExportTokens, handoffBudget, runHandoff } from '../../src/handoff/engine';
 import { verifyHandoffMarkdown } from '../../src/handoff/render';
 import { estimateTokens, urlKey } from '../../src/shared/util';
-import { messageBodyMarkdown } from '../../src/export/markdown';
+import { conversationToMarkdown, messageBodyMarkdown } from '../../src/export/markdown';
 import type { Conversation } from '../../src/shared/types';
 import { ALGORITHMS } from '../compression-lab/algorithms';
 import { buildGold, score } from '../compression-lab/metrics';
@@ -60,7 +62,9 @@ const TEMPLATE_BITS = [
 const REPEAT_NOTE_RE = /^_\(… \d+(?:줄 생략|\s+lines omitted) — [^\n]*\)_$/;
 const LABEL_RE = /^\s*\*\*[^*]+\*\*\s*(?:\[#m\d+\])?\s*$/;
 const FOOTER_RE = /Lucian AI Chat Exporter · /;
-const TRANSCRIPT_RE = /원문$|verbatim|Recent conversation|Full conversation/i;
+const TRANSCRIPT_RE = /원문$|verbatim|Recent conversation|Full conversation|핵심 문장만/i;
+/** The condensed form of a short conversation (v1.3.8). */
+const CONDENSED_RE = /^## (?:대화 원문 \(핵심 문장만\)|Conversation \(key sentences verbatim\))$/m;
 
 function msgSource(conv: Conversation, m: number): string {
   const msg = conv.messages[m];
@@ -168,9 +172,15 @@ if (!pairs.length) {
 
 const agg = {
   conversations: pairs.length,
+  condensed: 0,
   messageCountMismatch: 0,
   structureFail: 0,
   overBudget: 0,
+  /** Handoffs not smaller than the full Markdown export of the same chat (must be 0). */
+  notSmallerThanFullExport: 0,
+  notSmallerThanFullExportO200k: 0,
+  /** Largest handoff / full export ratio (o200k). */
+  maxShareOfFullExportO200k: 0,
   differsFromFreshRun: 0,
   brokenFileEntries: 0,
   signedOrImageLinks: 0,
@@ -188,23 +198,40 @@ const report: string[] = [];
 for (const { name, conv, md } of pairs) {
   const notes: string[] = [];
   const N = conv.messages.length;
-  if (Number(md.match(/\| (?:메시지 수|Messages) \| (\d+)/)?.[1]) !== N) {
+  const condensed = CONDENSED_RE.test(md);
+  if (condensed) agg.condensed++;
+  // The condensed form names the count in its source line, which a very small budget leaves out.
+  const count = md.match(/\| (?:메시지 수|Messages) \| (\d+)/)?.[1] ?? md.match(/· (?:메시지 (\d+)개|(\d+) messages?) ·/)?.slice(1).find(Boolean);
+  if (count != null && Number(count) !== N) {
     agg.messageCountMismatch++;
     notes.push('message count differs from the export');
   }
-  const lang = /^## 0\. 기본 정보/m.test(md) ? 'ko' : 'en';
+  const lang = /^## (?:0\. 기본 정보|대화 원문 \(핵심 문장만\))/m.test(md) ? 'ko' : 'en';
   if (!verifyHandoffMarkdown(md, lang).ok) {
     agg.structureFail++;
     notes.push('structure check failed');
   }
+  // Handoffs made before v1.3.8 included short chats whole ("전체 대화 원문").
   const full = /전체 대화 원문|Full conversation/.test(md);
   const tokens = estimateTokens(md);
-  const budget = handoffBudget(prepare(conv).sourceTokens);
-  if (!full && tokens > budget * 1.02) {
+  const R = fullExportTokens(conv);
+  const budget = handoffBudget(R);
+  if (tokens > budget * 1.02) {
     agg.overBudget++;
     notes.push(`over budget: ${tokens} > ${budget}`);
   }
-  const strip = (s: string) => s.replace(/^\| (?:추출 시각|Extracted) \|.*$/m, '');
+  if (tokens >= R) {
+    agg.notSmallerThanFullExport++;
+    notes.push(`not smaller than the full export: ${tokens} ≥ ${R}`);
+  }
+  const fullMd = conversationToMarkdown(conv, { locale: lang }).text;
+  const share = o200k(md).length / o200k(fullMd).length;
+  agg.maxShareOfFullExportO200k = Math.max(agg.maxShareOfFullExportO200k, +share.toFixed(3));
+  if (share >= 1) {
+    agg.notSmallerThanFullExportO200k++;
+    notes.push(`not smaller than the full export by o200k: ${(100 * share).toFixed(0)}%`);
+  }
+  const strip = (s: string) => s.replace(/^\| (?:추출 시각|Extracted) \|.*$/m, '').replace(/ · (?:추출|extracted) \d{4}-\d\d-\d\d \d\d:\d\d$/m, '');
   if (strip(runHandoff(conv, {}).markdown) !== strip(md)) {
     agg.differsFromFreshRun++;
     notes.push('differs from a fresh run of this engine (other version, or a stale cache)');
@@ -245,7 +272,8 @@ for (const { name, conv, md } of pairs) {
           agg.repeatNotes++;
           continue;
         }
-        let f = norm(line.replace(/\[(?:이미지|image)(?::[^\]]*)?\]/g, ' '));
+        // The condensed form shows list items with "- " whatever their marker was ("1.").
+        let f = norm(line.replace(/\[(?:이미지|image|첨부|Attachment)(?::[^\]]*)?\]/g, ' ').replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ''));
         for (const re of TEMPLATE_BITS) f = f.replace(re, ' ');
         if (f.length < 12 || cur < 0 || FOOTER_RE.test(line) || /^… \[(?:omitted|약)/.test(line.trim()) || /^(첨부파일|attachment|추출된 텍스트|extracted text)/.test(f)) continue;
         agg.transcriptLines.total++;
@@ -286,11 +314,11 @@ for (const { name, conv, md } of pairs) {
   agg.excerpts.elsewhere += t.elsewhere;
   agg.excerpts.missing += t.missing;
   if (t.missing || t.elsewhere) notes.push(`excerpts: ${t.cited}/${t.total} in the cited message, ${t.elsewhere} elsewhere, ${t.missing} not found`);
-  if (notes.length || t.examples.length) report.push(`${name} (${N} messages, ${full ? 'full' : 'compressed'}):\n  - ${notes.join('\n  - ')}${t.examples.length ? `\n  examples:\n    ${t.examples.slice(0, 8).join('\n    ')}` : ''}`);
+  if (notes.length || t.examples.length) report.push(`${name} (${N} messages, ${full ? 'full (before v1.3.8)' : condensed ? 'condensed' : 'compressed'}):\n  - ${notes.join('\n  - ')}${t.examples.length ? `\n  examples:\n    ${t.examples.slice(0, 8).join('\n    ')}` : ''}`);
 }
 
-// Retention of the compressed handoffs, with the compression lab's metrics (and plain coverage at
-// the same budget for reference).
+// Retention of the handoffs, with the compression lab's metrics (and plain coverage at the same
+// budget for reference).
 const P = pairs.map((x) => prepare(x.conv));
 const idf = corpusIdf(P);
 const keys = ['fact', 'keyTerms', 'user', 'entities', 'recent', 'composite'] as const;
@@ -301,14 +329,14 @@ pairs.forEach((x, k) => {
   n++;
   const gold = buildGold(P[k], idf);
   const a = score(x.md, gold);
-  const b = score(ALGORITHMS.coverage(P[k], handoffBudget(P[k].sourceTokens), idf), gold);
+  const b = score(ALGORITHMS.coverage(P[k], handoffBudget(fullExportTokens(x.conv)), idf), gold);
   for (const key of keys) {
     sum.lucian[key] += a[key];
     sum.coverage[key] += b[key];
   }
 });
 const pct = (o: Record<string, number>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, +((100 * v) / Math.max(1, n)).toFixed(1)]));
-const summary = { ...agg, retentionCompressed: { n, handoff: pct(sum.lucian), coverage: pct(sum.coverage) } };
+const summary = { ...agg, retention: { n, handoff: pct(sum.lucian), coverage: pct(sum.coverage) } };
 writeFileSync(join(DIR, 'report.txt'), `${JSON.stringify(summary, null, 2)}\n\n${report.join('\n\n')}\n`);
 console.log(JSON.stringify(summary, null, 2));
 console.log(`\nDetails (quote the conversations, keep them out of the repo): ${join(DIR, 'report.txt')}`);

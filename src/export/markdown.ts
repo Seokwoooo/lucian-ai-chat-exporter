@@ -2,6 +2,7 @@
 // intermediate representation used by the TXT, HTML/PDF, DOCX and HWPX exporters.
 
 import { attachmentName, t, formatBytes, type Locale } from '../shared/i18n';
+import { sourceDomain } from '../shared/sites';
 import type { Conversation, ExportContent, ExportMessage } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 
@@ -36,9 +37,9 @@ export function roleLabel(conv: Pick<Conversation, 'siteName'>, msg: ExportMessa
   return msg.role === 'user' ? t(locale, 'doc.user') : conv.siteName;
 }
 
+/** "ChatGPT · 2026-10-21 09:30". Model names are left out (v1.3.8); JSON keeps them. */
 export function messageHeaderText(conv: Pick<Conversation, 'siteName'>, msg: ExportMessage, locale: Locale): string {
   const parts = [roleLabel(conv, msg, locale)];
-  if (msg.role === 'assistant' && msg.model) parts.push(msg.model);
   if (msg.created_at) parts.push(formatDateTime(msg.created_at));
   return parts.join(' · ');
 }
@@ -64,7 +65,7 @@ function replaceOutsideInlineCode(text: string, fn: (s: string) => string): stri
 }
 
 export function rewriteInlineImages(md: string, imageHref?: (url: string) => string | undefined, unmapped?: (alt: string) => string | undefined): string {
-  if (!imageHref && !unmapped) return md;
+  if ((!imageHref && !unmapped) || !md.includes('![')) return md;
   return replaceOutsideCode(md, (seg) =>
     seg.replace(/!\[([^\]]*)\]\((\S+?)(\s+"[^"]*")?\)/g, (all, alt: string, url: string, title?: string) => {
       const next = imageHref?.(url);
@@ -176,10 +177,9 @@ export function messageBodyMarkdown(msg: ExportMessage, opts: MdOptions): string
 
 export function conversationHeaderMarkdown(conv: Conversation, locale: Locale, exportedAt = Date.now()): string {
   const lines = [`# ${conv.title || conv.siteName}`, ''];
-  lines.push(`- ${t(locale, 'doc.source')}: [${conv.siteName}](${conv.fromUrl})`);
+  lines.push(`- ${t(locale, 'doc.source')}: [${sourceDomain(conv)}](${conv.fromUrl})`);
   lines.push(`- ${t(locale, 'doc.exportedAt')}: ${formatDateTime(exportedAt)}`);
   lines.push(`- ${t(locale, 'doc.messages')}: ${conv.messages.length}`);
-  if (conv.model) lines.push(`- ${t(locale, 'doc.model')}: ${conv.model}`);
   return lines.join('\n');
 }
 

@@ -97,11 +97,10 @@ async function buildHandoff(req: BuildRequest, conv: Conversation): Promise<Buil
   const output = new TextDecoder('utf-8', { fatal: true }).decode(bytes) === r.markdown ? verifyHandoffMarkdown(r.markdown, r.lang) : { ok: false, detail: 'utf-8' };
   const verification = buildVerification(conv, 'handoff', { output, formatLabel: 'Markdown' });
   const extra: VerificationCheck[] = [];
-  extra.push(
-    r.stats.mode === 'full'
-      ? { code: 'handoff.full', status: 'info' }
-      : { code: 'handoff.compressed', status: 'info', params: { src: r.stats.sourceTokens.toLocaleString('en-US'), out: r.stats.outputTokens.toLocaleString('en-US') } },
-  );
+  const sizes = { src: r.stats.sourceTokens.toLocaleString('en-US'), out: r.stats.outputTokens.toLocaleString('en-US'), pct: Math.round((100 * r.stats.outputTokens) / Math.max(1, r.stats.sourceTokens)) };
+  extra.push({ code: r.stats.mode === 'condensed' ? 'handoff.condensed' : 'handoff.compressed', status: 'info', params: sizes });
+  // The engine keeps the handoff within 2/3 of the full export; say so if that ever fails.
+  if (r.stats.outputTokens >= r.stats.sourceTokens) extra.push({ code: 'handoff.size', status: 'warn', params: sizes });
   if (r.stats.uncertain > 0) extra.push({ code: 'handoff.uncertain', status: 'info', params: { n: r.stats.uncertain } });
   if (r.stats.cacheHits > 0) extra.push({ code: 'handoff.cache', status: 'info', params: { hits: r.stats.cacheHits } });
   verification.checks.splice(1, 0, ...extra);

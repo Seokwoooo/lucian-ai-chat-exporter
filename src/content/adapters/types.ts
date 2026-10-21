@@ -50,6 +50,11 @@ export interface SiteAdapter {
    * is added. The site renders them only once an answer is complete.
    */
   actionBars(): Element[];
+  /**
+   * Element of `bar` the Lucian button goes in front of, so it sits right after the site's own
+   * buttons rather than past a spacer (Gemini). Default: appended at the end.
+   */
+  actionAnchor?(bar: Element): Element | null;
 }
 
 export interface FetchJsonOptions extends RequestInit {

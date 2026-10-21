@@ -163,6 +163,25 @@ describe.each(['md', 'txt', 'json', 'html', 'docx', 'hwpx', 'zip'] as const)('ex
   });
 });
 
+describe('source is the site address, no model names (v1.3.8)', () => {
+  const docText = (format: 'md' | 'txt' | 'html' | 'docx' | 'hwpx', bytes: Uint8Array) => {
+    if (format === 'docx') return strFromU8(unzipSync(bytes)['word/document.xml']);
+    if (format === 'hwpx') return Object.entries(unzipSync(bytes)).filter(([k]) => k.startsWith('Contents/section')).map(([, v]) => strFromU8(v)).join('');
+    return strFromU8(bytes);
+  };
+  const SOURCE = { md: '원본: [chatgpt.com](', txt: '원본: chatgpt.com (', html: '">chatgpt.com</a>', docx: '원본: chatgpt.com', hwpx: '원본: chatgpt.com' } as const;
+
+  it.each(['md', 'txt', 'html', 'docx', 'hwpx'] as const)('%s', async (format) => {
+    const text = docText(format, (await runExport(input(format))).bytes);
+    expect(text).toContain(SOURCE[format]);
+    expect(text).not.toContain('gpt-test');
+  });
+
+  it('JSON keeps the model for the record', async () => {
+    expect(strFromU8((await runExport(input('json'))).bytes)).toContain('gpt-test');
+  });
+});
+
 describe('format specifics', () => {
   it('html escapes raw HTML from messages and embeds images as data URLs', async () => {
     const html = new TextDecoder().decode((await runExport(input('html'))).bytes);

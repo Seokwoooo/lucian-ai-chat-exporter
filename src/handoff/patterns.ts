@@ -213,7 +213,22 @@ export function extractLinks(text: string): Array<{ url: string; title?: string 
  * — the links section lists them — and the rest of the sentence is kept verbatim.
  */
 export function bulletText(text: string): string {
-  return stripTracking(text.replace(/\s?\((?:\[[^\]\n]{1,80}\]\(https?:\/\/[^)\s]+\)(?:,\s*)?)+\)/g, '')).trim();
+  return balanceBold(stripTracking(text.replace(/\s?\((?:\[[^\]\n]{1,80}\]\(https?:\/\/[^)\s]+\)(?:,\s*)?)+\)/g, '')).trim());
+}
+
+/**
+ * A sentence cut out of a bold span ("**네. 별도입니다!** …" → "별도입니다!** …") keeps a lone `**`
+ * that would turn the rest of the document bold; it is dropped (v1.3.8). A `**` right after a word
+ * and before a space or punctuation closes a span opened in the previous sentence; otherwise the
+ * last one opens a span that closes in the next sentence.
+ */
+export function balanceBold(text: string): string {
+  if ((text.split('**').length - 1) % 2 === 0) return text;
+  const first = text.indexOf('**');
+  const before = first > 0 ? text[first - 1] : ' ';
+  const after = text[first + 2] ?? ' ';
+  const at = !/\s/.test(before) && /[\s.,;:!?)\]」』”’]/.test(after) ? first : text.lastIndexOf('**');
+  return `${text.slice(0, at)}${text.slice(at + 2)}`.trim();
 }
 
 /** Removes tracking parameters (utm_source=chatgpt.com…) from every URL in the text. */

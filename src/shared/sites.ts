@@ -13,6 +13,21 @@ export const SITES: Record<SiteId, SiteInfo> = {
   grok: { id: 'grok', name: 'Grok', home: 'https://grok.com/' },
 };
 
+/**
+ * "chatgpt.com", "grok.com" — where a conversation was exported from. Documents show this instead of
+ * the service and model names (v1.3.8: model slugs such as "grok-4" were confusing as a source).
+ */
+export function sourceDomain(conv: { site: SiteId; fromUrl?: string }): string {
+  try {
+    const host = new URL(conv.fromUrl ?? '').hostname.replace(/^www\./, '');
+    if (detectSite(`https://${host}/`) === conv.site) return host;
+  } catch {
+    /* not a URL: fall back to the service's home */
+  }
+  const home = SITES[conv.site]?.home;
+  return home ? new URL(home).hostname : String(conv.site);
+}
+
 export function detectSite(url: string | undefined): SiteId | null {
   if (!url) return null;
   let host: string;

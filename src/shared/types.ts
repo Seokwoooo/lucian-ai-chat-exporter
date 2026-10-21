@@ -101,6 +101,11 @@ export interface ExtractionInfo {
   sourceNodeCount: number;
   /** Raw visible node ids that did not end up in any exported message (should be empty). */
   missingNodeIds: string[];
+  /**
+   * One "role:shape" per missing node, e.g. "assistant:multimodal_text(audio_transcription)", so the
+   * result details say what could not be converted (v1.3.8). Roles: user | assistant | unknown.
+   */
+  missingKinds?: string[];
   /** Nodes intentionally excluded (system prompts, hidden tool plumbing, unfinished nodes...). */
   skipped: SkippedNode[];
   /** Number of user turns rendered on screen when extraction ran (undefined if not detectable). */
@@ -222,7 +227,8 @@ export interface HandoffStats {
   openTasks: number;
   cacheHits: number;
   cacheMisses: number;
-  mode: 'full' | 'compressed';
+  /** 'condensed': a short conversation, handed off as its key sentences in order (no sections). */
+  mode: 'compressed' | 'condensed';
 }
 
 export interface JobState {

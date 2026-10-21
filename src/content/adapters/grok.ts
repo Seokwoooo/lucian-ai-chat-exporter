@@ -47,6 +47,10 @@ export function convertGrokResponse(r: Json): ExportContent[] {
   const cited = new Set<number>();
   const text = typeof r.message === 'string' ? cleanGrokMarkdown(r.message, results, cited).trim() : '';
   if (text) out.push({ type: r.sender === 'human' ? 'text' : 'markdown', content: text });
+  // A failed answer has no text, only streamErrors ("This model is temporarily unavailable…");
+  // grok.com shows that notice in the answer's place, so the documents do too (2026-10).
+  const errors = [...new Set(((r.streamErrors ?? []) as Json[]).map((e) => (typeof e?.message === 'string' ? e.message.trim() : '')).filter(Boolean))];
+  if (errors.length) out.push({ type: 'markdown', content: errors.map((m) => `> **Grok error:** ${m}`).join('\n>\n') });
   for (const p of r.generatedImageUrls ?? []) {
     const url = assetUrl(p);
     if (url) out.push({ type: 'image', imageUrl: url, linkType: 'private' });
@@ -110,7 +114,10 @@ export function selectGrokPath(nodes: Json[], byId: Map<string, Json>): string[]
   const path: string[] = [];
   const seen = new Set<string>();
   let cur: string | undefined = leaf;
-  while (cur && !seen.has(cur)) {
+  // Only listed nodes belong to the transcript: the first question's parent is a hidden, empty
+  // "system" response that response-node leaves out (every grok.com chat, 2026-10). Walking into it
+  // counted one lost message on every export.
+  while (cur && parentOf.has(cur) && !seen.has(cur)) {
     seen.add(cur);
     path.push(cur);
     cur = parentOf.get(cur);
@@ -121,6 +128,7 @@ export function selectGrokPath(nodes: Json[], byId: Map<string, Json>): string[]
 function convertIds(ids: string[], byId: Map<string, Json>) {
   const messages: ExportMessage[] = [];
   const missing: string[] = [];
+  const missingKinds: string[] = [];
   const skipped: SkippedNode[] = [];
   let visible = 0;
   for (const id of ids) {
@@ -128,6 +136,11 @@ function convertIds(ids: string[], byId: Map<string, Json>) {
     if (!r) {
       visible++;
       missing.push(id);
+      missingKinds.push('unknown:not-loaded');
+      continue;
+    }
+    if (r.sender === 'system') {
+      skipped.push({ id, reason: 'system' });
       continue;
     }
     if (r.partial) {
@@ -138,6 +151,7 @@ function convertIds(ids: string[], byId: Map<string, Json>) {
     const contents = convertGrokResponse(r);
     if (!contents.length) {
       missing.push(id);
+      missingKinds.push(`${r.sender === 'human' ? 'user' : 'assistant'}:response`);
       continue;
     }
     messages.push({
@@ -149,7 +163,7 @@ function convertIds(ids: string[], byId: Map<string, Json>) {
       contents,
     });
   }
-  return { messages, missing, skipped, visible };
+  return { messages, missing, missingKinds, skipped, visible };
 }
 
 export function parseGrokConversation(input: GrokParseInput): Conversation {
@@ -169,7 +183,7 @@ export function parseGrokConversation(input: GrokParseInput): Conversation {
     const chain: string[] = [];
     let cur: string | undefined = n.responseId;
     const seen = new Set<string>();
-    while (cur && !onPath.has(cur) && !seen.has(cur)) {
+    while (cur && parentOf.has(cur) && !onPath.has(cur) && !seen.has(cur)) {
       seen.add(cur);
       chain.push(cur);
       cur = parentOf.get(cur);
@@ -191,7 +205,7 @@ export function parseGrokConversation(input: GrokParseInput): Conversation {
     model: [...main.messages].reverse().find((m) => m.model)?.model,
     messages: main.messages,
     otherBranchMessages: otherBranchMessages.length ? otherBranchMessages : undefined,
-    extraction: { method: 'api', sourceNodeCount: main.visible, missingNodeIds: main.missing, skipped: main.skipped, warnings: [], fetchedAt: Date.now() },
+    extraction: { method: 'api', sourceNodeCount: main.visible, missingNodeIds: main.missing, missingKinds: main.missingKinds, skipped: main.skipped, warnings: [], fetchedAt: Date.now() },
   };
   if (!conv.title) conv.title = titleFromFirstUserMessage(conv);
   return conv;

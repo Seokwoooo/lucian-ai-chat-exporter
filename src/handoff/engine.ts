@@ -7,12 +7,12 @@
 
 import type { Conversation, HandoffStats, Role } from '../shared/types';
 import { cleanUrl, estimateTokens, hangulRatio, hostLabel, urlKey } from '../shared/util';
-import { messageBodyMarkdown, replaceOutsideCode } from '../export/markdown';
+import { conversationToMarkdown, messageBodyMarkdown, replaceOutsideCode } from '../export/markdown';
 import { clusterNearDuplicates, minhash } from './minhash';
 import { conceptsOf, greedyCoverage, type CoverItem } from './coverage';
-import { ANAPHOR_RE, CODE_ERROR_RE, F, REVERSAL_RE, bulletText, classify, clipText, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, nameImages, replacementPairs, stripTracking, topicTokens } from './patterns';
-import { segmentMessage, type Unit } from './segment';
-import { renderHandoff, type AttachmentItem, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
+import { ANAPHOR_RE, CODE_ERROR_RE, F, REVERSAL_RE, balanceBold, bulletText, classify, clipText, extractCommands, extractLinks, extractPaths, extractUrls, jaccard, nameImages, replacementPairs, stripTracking, topicTokens } from './patterns';
+import { segmentMarkdown, segmentMessage, type Unit } from './segment';
+import { CONDENSED_FRAMES, clipHead, renderCondensedHandoff, renderHandoff, type CondensedFrame, type AttachmentItem, type CondensedMessage, type CondensedPiece, type HandoffDoc, type Item, type CodeItem, type PastItem, type RecentMessage, type RequestItem } from './render';
 
 export interface CacheEntry {
   flags: number;
@@ -41,7 +41,7 @@ export interface HandoffOptions {
   onPhase?: (phase: 'normalize' | 'dedupe' | 'score' | 'render') => void;
   /** Fraction of the work done (0…1): normalize ≈ 35%, dedupe ≈ 40%, score + select ≈ 20%, render. */
   onProgress?: (fraction: number) => void;
-  /** Fixed output budget in tokens instead of the default (12% of the source, 8k–32k). Used by the compression lab. */
+  /** Fixed output budget in tokens instead of the default (handoffBudget). Used by the compression lab. */
   budgetTokens?: number;
   /** How the remaining budget is filled with earlier context: relevance ranking or concept coverage. */
   selection?: 'relevance' | 'coverage';
@@ -59,6 +59,8 @@ export interface Layout {
   recentMsgCap: number;
   /** The same caps as shares of the budget, so a small budget clips harder (0 = fixed caps). */
   lastMsgShare: number;
+  /** Upper bound for each of the last two messages as a share of the budget (binds below ~8k). */
+  lastMsgMaxShare: number;
   recentMsgShare: number;
   /** Latest version of each code block not already in the transcript. */
   codeShare: number;
@@ -74,12 +76,6 @@ export interface Layout {
   /** Lines a later transcript message repeats (revised drafts) are shown once (v1.3.4). */
   collapseRepeats: boolean;
   /**
-   * When the whole conversation is in the document, the sections above it are a short index of it
-   * (requests without answer summaries, short quotes, a pointer to the last answer) rather than a
-   * second copy (v1.3.4).
-   */
-  fullIndex: boolean;
-  /**
    * Share of the budget for verbatim attachment text (files and pasted text) of messages outside
    * the transcript; 0 = no attachment section (v1.3.5). The first and the latest request's
    * attachments come first.
@@ -87,11 +83,19 @@ export interface Layout {
   attachShare: number;
   /** Appendix table of referenced messages (role, time, first line). */
   refIndex: boolean;
+  /**
+   * Budgets below this get the condensed form (the conversation with its key sentences) instead of
+   * the sections (v1.3.8); 0 = always sections.
+   */
+  sectionsFrom: number;
   /** How much rule-based relevance raises a unit's coverage gain (0 = concepts only, 1 = up to ×2 over the least relevant). */
   relPrior: number;
   /** One listed file path per this many budget tokens (6–40 paths). */
   filesPer: number;
 }
+
+/** Budget from which the handoff has sections (see Layout.sectionsFrom). */
+export const SECTIONS_FROM = 4_000;
 
 /**
  * Chosen with the QA evaluation (docs/compression-lab.md, 3rd study): a reader AI answered
@@ -107,6 +111,7 @@ export const DEFAULT_LAYOUT: Layout = {
   // The last two messages keep the v1.2 cap: on real chats (few, very long messages) a cap that
   // shrinks with the budget lost 10 points of the latest messages for 5 points of facts.
   lastMsgShare: 0,
+  lastMsgMaxShare: 0.32,
   recentMsgShare: 0.06,
   codeShare: 0.06,
   codeMin: 300,
@@ -115,9 +120,9 @@ export const DEFAULT_LAYOUT: Layout = {
   clippedExcerpts: true,
   repair: true,
   collapseRepeats: true,
-  fullIndex: true,
   attachShare: 0.12,
   refIndex: false,
+  sectionsFrom: SECTIONS_FROM,
   relPrior: 0.5,
   filesPer: 200,
 };
@@ -129,6 +134,7 @@ export const V12_LAYOUT: Layout = {
   lastMsgCap: 2500,
   recentMsgCap: 1500,
   lastMsgShare: 0,
+  lastMsgMaxShare: 0.32,
   recentMsgShare: 0,
   codeShare: 0.1,
   codeMin: 600,
@@ -137,9 +143,9 @@ export const V12_LAYOUT: Layout = {
   clippedExcerpts: true,
   repair: true,
   collapseRepeats: false,
-  fullIndex: false,
   attachShare: 0,
   refIndex: true,
+  sectionsFrom: 0,
   relPrior: 0.5,
   filesPer: 200,
 };
@@ -150,10 +156,18 @@ export const V11_LAYOUT: Layout = { ...V12_LAYOUT, lastMsgCap: 6000, recentMsgCa
 /** Earlier-context selection used by default (chosen with the compression lab, docs/compression-lab.md). */
 export const DEFAULT_SELECTION: 'relevance' | 'coverage' = 'coverage';
 
-/** Conversations up to this size are handed off in full: nothing needs to be dropped. */
-export const FULL_MODE_TOKENS = 12_000;
+/**
+ * The handoff is never larger than this share of the full export of the same conversation
+ * (v1.3.8). Short conversations used to be handed off whole, with the sections and the reader
+ * instructions on top, so the "compressed" file was larger than the full Markdown export. 2/3 is
+ * the share the shortest compressed conversations already had (8k of 12k).
+ */
+export const FULL_EXPORT_SHARE = 2 / 3;
+/** The rendered document may exceed its budget by this factor (section estimates are rough). */
+export const BUDGET_TOLERANCE = 1.02;
 const MIN_BUDGET = 8_000;
 const MAX_BUDGET = 32_000;
+
 const SIG_MIN_PROSE = 120;
 /** User sentences are short but repeated instructions matter, so they get signatures earlier. */
 const SIG_MIN_USER = 24;
@@ -161,8 +175,43 @@ const SIG_MIN_CODE = 60;
 
 const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
+/**
+ * Output budget for a conversation whose full export is `sourceTokens` long: 12% of it within
+ * 8k–32k, and never more than FULL_EXPORT_SHARE of it.
+ */
 export function handoffBudget(sourceTokens: number): number {
-  return Math.round(Math.min(MAX_BUDGET, Math.max(MIN_BUDGET, sourceTokens * 0.12)));
+  return Math.min(Math.round(Math.min(MAX_BUDGET, Math.max(MIN_BUDGET, sourceTokens * 0.12))), Math.floor(sourceTokens * FULL_EXPORT_SHARE));
+}
+
+/**
+ * Size of the full export the handoff is measured against: the Markdown export with the shortest
+ * labels (English) and images as text notes, so the handoff stays smaller than every variant of
+ * it (Korean labels, image links) and than the TXT export.
+ */
+export function fullExportTokens(conv: Conversation, now = Date.now()): number {
+  return estimateTokens(conversationToMarkdown(conv, { locale: 'en', unmappedImage: 'omit' }, now).text);
+}
+
+/**
+ * The user's language: Korean when at least a third of the user's messages are mostly Hangul. Per
+ * message, so one long English paste (a log, a terminal screen) does not turn a Korean user's
+ * handoff into English (v1.3.8).
+ */
+export function detectLanguage(conv: Conversation): 'ko' | 'en' {
+  let ko = 0;
+  let counted = 0;
+  for (const msg of conv.messages) {
+    if (msg.role !== 'user') continue;
+    const text = msg.contents
+      .filter((c) => c.type === 'text' || c.type === 'markdown')
+      .map((c) => c.content ?? '')
+      .join('\n');
+    if (!/[A-Za-z가-힣]/.test(text)) continue;
+    counted++;
+    if (hangulRatio(text) >= 0.2) ko++;
+  }
+  if (counted) return ko * 3 >= counted ? 'ko' : 'en';
+  return hangulRatio(conv.messages.map((m) => m.contents.map((c) => c.content ?? '').join(' ')).join(' ').slice(0, 40_000)) >= 0.2 ? 'ko' : 'en';
 }
 
 interface Analysis {
@@ -191,26 +240,22 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
   const units: Unit[] = [];
   const msgTokens = new Float64Array(N);
   const msgUnitStart = new Int32Array(N + 1);
-  let userText = '';
   const progress = opts.onProgress;
   const step = Math.max(1, Math.floor(N / 50));
   for (let m = 0; m < N; m++) {
     if (progress && m % step === 0) progress((0.35 * m) / N);
     msgUnitStart[m] = units.length;
     segmentMessage(messages[m], m, units);
-    let chars = 0;
     for (const c of messages[m].contents) {
       if (c.type === 'thinking') continue;
-      const s = c.content ?? c.attachment?.extractedText ?? '';
-      chars += s.length;
-      msgTokens[m] += estimateTokens(s);
-      if (messages[m].role === 'user' && userText.length < 40_000) userText += `${s}\n`;
+      msgTokens[m] += estimateTokens(c.content ?? c.attachment?.extractedText ?? '');
     }
-    void chars;
   }
   msgUnitStart[N] = units.length;
-  const sourceTokens = Math.round(msgTokens.reduce((a, b) => a + b, 0));
-  const lang: 'ko' | 'en' = hangulRatio(userText || messages.map((m) => m.contents.map((c) => c.content ?? '').join(' ')).join(' ').slice(0, 40_000)) >= 0.2 ? 'ko' : 'en';
+  // The source size is the full export: what the user compares the handoff with (v1.3.8). Tool
+  // output is clipped there, and headers, sources and image notes count.
+  const sourceTokens = fullExportTokens(conv, now);
+  const lang = detectLanguage(conv);
   const timings: HandoffTimings = { normalizeMs: clock() - t0, dedupeMs: 0, scoreMs: 0, renderMs: 0 };
 
   // ---------- 2. dedupe ----------
@@ -339,7 +384,19 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
 
   progress?.(0.85);
   const a: Analysis = { units, flags, score, rep, repeats, versions };
-  const ctx: BuildCtx = { sourceTokens, msgTokens, msgUnitStart, confirmedMsgs, lang, now, budgetTokens: opts.budgetTokens, selection: opts.selection ?? DEFAULT_SELECTION, layout: { ...DEFAULT_LAYOUT, ...opts.layout }, pastExtra: 0, recentScale: 1 };
+  const ctx: BuildCtx = { sourceTokens, msgTokens, msgUnitStart, confirmedMsgs, lang, now, budgetTokens: opts.budgetTokens, selection: opts.selection ?? DEFAULT_SELECTION, layout: { ...DEFAULT_LAYOUT, ...opts.layout }, pastExtra: 0, recentScale: 1, squeeze: false };
+  const budget0 = Math.max(1, ctx.budgetTokens ?? handoffBudget(sourceTokens));
+  // A short conversation: the conversation itself, condensed to its key sentences.
+  if (budget0 < ctx.layout.sectionsFrom) {
+    timings.scoreMs = clock() - t0;
+    progress?.(0.95);
+    opts.onPhase?.('render');
+    t0 = clock();
+    const md = buildCondensed(conv, a, ctx, Math.floor(budget0 * BUDGET_TOLERANCE));
+    timings.renderMs = clock() - t0;
+    progress?.(1);
+    return { markdown: md, lang, cache, timings, stats: condensedStats(md, sourceTokens, N, hits, misses) };
+  }
   let doc = buildDocument(conv, a, ctx);
   timings.scoreMs = clock() - t0;
 
@@ -351,38 +408,40 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
   // Section estimates leave out formatting, so the first pass misses the budget a little either
   // way. Up to two more passes move the difference into (or out of) the earlier context, the one
   // part whose size is free; the result must stay within the budget (+2%).
-  if (doc.budget != null) {
-    const B = doc.budget;
-    const limit = B * 1.02;
-    let tokens = estimateTokens(markdown);
-    let last = tokens;
-    let extra = 0;
-    let keptExtra = 0;
-    for (let pass = 0; pass < 2; pass++) {
-      const diff = B - last;
-      if (diff >= -B * 0.02 && diff <= B * 0.04) break;
-      extra += Math.round(diff * (diff > 0 ? 0.92 : 1.05));
-      const next = buildDocument(conv, a, { ...ctx, pastExtra: extra });
-      const md2 = renderHandoff(next);
-      last = estimateTokens(md2);
-      // Over the limit: take the smaller one. Within it: take the fuller one.
-      const better = last <= limit ? tokens > limit || last > tokens : tokens > limit && last < tokens;
-      if (better) {
-        doc = next;
-        markdown = md2;
-        tokens = last;
-        keptExtra = extra;
-      }
+  const B = doc.budget;
+  const limit = Math.floor(B * BUDGET_TOLERANCE);
+  let tokens = estimateTokens(markdown);
+  let last = tokens;
+  let extra = 0;
+  let keptExtra = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    const diff = B - last;
+    if (diff >= -B * 0.02 && diff <= B * 0.04) break;
+    if (diff > 0 && doc.pastExhausted) break;
+    extra += Math.round(diff * (diff > 0 ? 0.92 : 1.05));
+    const next = buildDocument(conv, a, { ...ctx, pastExtra: extra });
+    const md2 = renderHandoff(next);
+    last = estimateTokens(md2);
+    // Over the limit: take the smaller one. Within it: take the fuller one.
+    const better = last <= limit ? tokens > limit || last > tokens : tokens > limit && last < tokens;
+    if (better) {
+      doc = next;
+      markdown = md2;
+      tokens = last;
+      keptExtra = extra;
     }
-    // Still over: the fixed sections alone exceed the budget (seen on a real 2-message chat whose
-    // request was a 15k-token paste: there was no earlier context left to shrink). The verbatim
-    // transcript is then clipped harder; its cut-out middle stays out, as for any clipped message.
+  }
+  // Still over: the fixed sections alone exceed the budget (seen on a real 2-message chat whose
+  // request was a 15k-token paste: there was no earlier context left to shrink). The verbatim
+  // transcript is then clipped harder; its cut-out middle stays out, as for any clipped message.
+  // If that is not enough, the optional sections go (squeeze) and the transcript shrinks again.
+  const shrink = (base: BuildCtx) => {
     let scale = 1;
-    for (let pass = 0; pass < 3 && tokens > limit; pass++) {
+    for (let pass = 0; pass < 4 && tokens > limit; pass++) {
       const recentTok = doc.recent.reduce((s, r) => s + estimateTokens(r.body), 0);
-      if (recentTok < 200) break;
-      scale = Math.max(0.1, scale * (1 - (1.1 * (tokens - B)) / recentTok));
-      const next = buildDocument(conv, a, { ...ctx, pastExtra: keptExtra, recentScale: scale });
+      if (recentTok < 40) break;
+      scale = Math.max(0.02, scale * (1 - (1.1 * (tokens - B)) / recentTok));
+      const next = buildDocument(conv, a, { ...base, recentScale: scale });
       const md2 = renderHandoff(next);
       const t2 = estimateTokens(md2);
       if (t2 >= tokens) break;
@@ -390,11 +449,29 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
       markdown = md2;
       tokens = t2;
     }
+  };
+  shrink({ ...ctx, pastExtra: keptExtra });
+  if (tokens > limit) {
+    const squeezed = buildDocument(conv, a, { ...ctx, squeeze: true });
+    const md2 = renderHandoff(squeezed);
+    const t2 = estimateTokens(md2);
+    if (t2 < tokens) {
+      doc = squeezed;
+      markdown = md2;
+      tokens = t2;
+    }
+    shrink({ ...ctx, squeeze: true });
+  }
+  // Last resort (the sections do not fit at all): the condensed form, which always fits.
+  if (tokens > limit) {
+    const md = buildCondensed(conv, a, ctx, limit);
+    timings.renderMs = clock() - t0;
+    progress?.(1);
+    return { markdown: md, lang, cache, timings, stats: condensedStats(md, sourceTokens, N, hits, misses) };
   }
   timings.renderMs = clock() - t0;
   progress?.(1);
 
-  const outputTokens = estimateTokens(markdown);
   return {
     markdown,
     lang,
@@ -402,18 +479,195 @@ export function runHandoff(conv: Conversation, opts: HandoffOptions = {}): Hando
     timings,
     stats: {
       sourceTokens,
-      outputTokens,
+      outputTokens: tokens,
       messages: N,
       decisions: doc.decisions.length,
       constraints: doc.constraints.length,
       openTasks: doc.open.length,
       cacheHits: hits,
       cacheMisses: misses,
-      mode: doc.mode,
+      mode: 'compressed',
       uncertain: doc.uncertainCount,
       outputChars: markdown.length,
     },
   };
+}
+
+function condensedStats(md: string, sourceTokens: number, messages: number, cacheHits: number, cacheMisses: number): HandoffResult['stats'] {
+  return { sourceTokens, outputTokens: estimateTokens(md), messages, decisions: 0, constraints: 0, openTasks: 0, cacheHits, cacheMisses, mode: 'condensed', uncertain: 0, outputChars: md.length };
+}
+
+/**
+ * The condensed form (v1.3.8): every message keeps its key sentences verbatim, in order. The
+ * heads of the latest message, the latest request and the first request come first; budgeted
+ * concept coverage (the same selection as the sections' earlier context) fills the rest; then
+ * the highest-scoring units that still fit. Attachment text competes like message text. The
+ * result never exceeds `limit` tokens: units are dropped in reverse order of choice until it fits.
+ */
+function buildCondensed(conv: Conversation, a: Analysis, ctx: BuildCtx, limit: number): string {
+  const { units, score, rep, flags } = a;
+  const N = conv.messages.length;
+  const all: Unit[] = [...units];
+  const base = all.length;
+  conv.messages.forEach((msg, m) => {
+    for (const c of msg.contents) {
+      if (c.type === 'attachment' && c.attachment?.extractedText?.trim()) segmentMarkdown(stripTracking(c.attachment.extractedText), m, msg.role, all);
+      // Uploaded and generated images are named, never linked (their links need the user's login).
+      const images = c.type === 'image' ? [{ url: c.imageUrl, alt: c.alt }] : c.type === 'image_group' ? (c.imageGroup?.images ?? []).map((x) => ({ url: x.imageUrl ?? x.thumbnailUrl, alt: x.alt })) : [];
+      for (const img of images) if (img.url) all.push({ m, role: msg.role, kind: 'sentence', text: nameImages(`![${(img.alt ?? '').replace(/[[\]\n]/g, ' ')}](${img.url})`, ctx.lang), key: 0 });
+    }
+  });
+  const byMsg: number[][] = Array.from({ length: N }, () => []);
+  for (let i = 0; i < all.length; i++) byMsg[all[i].m].push(i);
+  const topicCache = new Map<number, string[]>();
+  const topics = (i: number) => {
+    let t = topicCache.get(i);
+    if (!t) topicCache.set(i, (t = topicTokens(all[i].kind === 'code' ? all[i].text.slice(0, 4000) : all[i].text)));
+    return t;
+  };
+  const pieceOf = (i: number): CondensedPiece => {
+    const u = all[i];
+    const kind = u.kind;
+    return { kind, text: kind === 'code' || kind === 'table' ? u.text : balanceBold(stripTracking(u.text)), lang: u.lang };
+  };
+  const pieceTokens = new Map<number, number>();
+  const tok = (i: number) => {
+    let t = pieceTokens.get(i);
+    if (t == null) {
+      const p = pieceOf(i);
+      pieceTokens.set(i, (t = estimateTokens(p.text) + (p.kind === 'code' ? 6 : p.kind === 'sentence' ? 1 : 2)));
+    }
+    return t;
+  };
+  const headerTokens = (m: number) => estimateTokens(`### [#m${m + 1}] ${conv.messages[m].role === 'user' ? '사용자' : conv.siteName}`) + 3;
+  // Older copies of repeated text and politeness carry nothing the latest copy does not.
+  const eligible = (i: number) => i >= base || (rep[i] === i && !(flags[i] & F.POLITE && all[i].text.length < 40));
+  // A heading alone says little: headings come only with the text after them (in a message head).
+  const free = (i: number) => eligible(i) && all[i].kind !== 'heading';
+
+  const emptyLast = N > 0 && conv.messages[N - 1].role === 'assistant' && byMsg[N - 1].length === 0;
+  const selected = new Set<number>();
+  const order: number[] = [];
+  const mandatory = new Set<number>();
+  const included = new Map<number, number>();
+  const render = (frame: CondensedFrame) => {
+    const msgs: CondensedMessage[] = [];
+    for (let m = 0; m < N; m++) {
+      if (!included.get(m)) continue;
+      const pieces: Array<CondensedPiece | null> = [];
+      let gap = false;
+      for (const i of byMsg[m]) {
+        if (selected.has(i)) {
+          if (gap) pieces.push(null);
+          gap = false;
+          pieces.push(pieceOf(i));
+        } else gap = true;
+      }
+      if (gap) pieces.push(null);
+      msgs.push({ m, pieces });
+    }
+    // A last answer with nothing visible (still being written, or thinking only) is shown as such,
+    // so the next AI starts from the request before it.
+    if (emptyLast && !included.get(N - 1)) msgs.push({ m: N - 1, pieces: [] });
+    return renderCondensedHandoff(conv, ctx.lang, msgs, { ...frame, sourceTokens: ctx.sourceTokens, now: ctx.now });
+  };
+  // The richest frame that leaves at least about half of the budget for the conversation.
+  const frameAt = CONDENSED_FRAMES.findIndex((f) => estimateTokens(render(f)) <= limit * 0.45);
+  const frames = CONDENSED_FRAMES.slice(frameAt < 0 ? CONDENSED_FRAMES.length - 1 : frameAt);
+  let used = estimateTokens(render(frames[0]));
+  const costOf = (i: number) => tok(i) + (included.get(all[i].m) ? 0 : headerTokens(all[i].m));
+  const take = (i: number, must: boolean) => {
+    used += costOf(i);
+    selected.add(i);
+    order.push(i);
+    if (must) mandatory.add(i);
+    included.set(all[i].m, (included.get(all[i].m) ?? 0) + 1);
+  };
+  const content = Math.max(0, limit - used);
+  // Heads of the messages the next AI needs most: what fits of each, in order. The first unit may
+  // take up to twice the share, so a short request slightly over it is not lost.
+  const head = (ms: number[], share: number) => {
+    let t = 0;
+    for (const m of ms) {
+      if (m < 0) continue;
+      for (const i of byMsg[m]) {
+        if (!eligible(i) || selected.has(i)) continue;
+        const c = costOf(i);
+        if (used + c > limit || t + c > (t === 0 ? share * 2 : share)) continue;
+        take(i, true);
+        t += c;
+        if (t >= share * 0.9) return;
+      }
+    }
+  };
+  const lastUser = conv.messages.map((x) => x.role).lastIndexOf('user');
+  const firstUser = conv.messages.findIndex((x) => x.role === 'user');
+  head([N - 1], content * 0.3);
+  if (lastUser !== N - 1) head([lastUser], content * 0.15);
+  if (firstUser !== lastUser) head([firstUser], content * 0.1);
+  // What the user wrote carries the most per token (requests, rules, decisions): newest first.
+  const userMsgs: number[] = [];
+  for (let m = N - 1; m >= 0; m--) if (conv.messages[m].role === 'user' && m !== lastUser && m !== firstUser) userMsgs.push(m);
+  for (const m of userMsgs) head([m], content * 0.06);
+  // Concept coverage over everything else.
+  const weight = conceptWeight(units, (i) => topics(i), ctx.msgUnitStart, N);
+  const covered = new Set<string>();
+  for (const i of selected) for (const c of conceptsOf(topics(i))) covered.add(c);
+  const items: CoverItem[] = [];
+  for (let i = 0; i < all.length; i++) {
+    if (selected.has(i) || !free(i)) continue;
+    const u = all[i];
+    items.push({ id: i, concepts: conceptsOf(topics(i)), cost: tok(i), prior: 0.75 + 0.5 * (u.m / Math.max(1, N - 1)) + (u.role === 'user' ? 0.5 : 0) });
+  }
+  greedyCoverage(items, weight, Math.max(0, limit - used), covered, { cost: (it) => costOf(it.id), onChoose: (it) => take(it.id, false) });
+  // What is left of the budget goes to the strongest remaining units.
+  const rest = items.map((it) => it.id).filter((i) => !selected.has(i)).sort((x, y) => (y < base ? score[y] : 0.2) - (x < base ? score[x] : 0.2) || y - x);
+  for (const i of rest) if (used + costOf(i) <= limit) take(i, false);
+
+  // The estimate above adds pieces one by one; drop the last chosen until the whole fits.
+  const drop = (i: number) => {
+    selected.delete(i);
+    const n = (included.get(all[i].m) ?? 1) - 1;
+    if (n) included.set(all[i].m, n);
+    else included.delete(all[i].m);
+  };
+  for (const frame of frames) {
+    let md = render(frame);
+    let t = estimateTokens(md);
+    while (t > limit && selected.size) {
+      let removed = 0;
+      // Optional units first (latest choice first), then the heads.
+      const queue = [...order.filter((i) => selected.has(i) && !mandatory.has(i)), ...order.filter((i) => selected.has(i) && mandatory.has(i))];
+      while (queue.length && removed < t - limit) {
+        const i = queue.pop()!;
+        removed += costOf(i);
+        drop(i);
+      }
+      md = render(frame);
+      t = estimateTokens(md);
+    }
+    if (t <= limit) {
+      // Room left after dropping (an oversized unit went): the latest message gets a clipped head.
+      if (!included.get(N - 1) && N > 0) {
+        const room = limit - t - headerTokens(N - 1) - 4;
+        const first = byMsg[N - 1].find((i) => free(i));
+        if (first != null && room >= 12) {
+          const clipped = clipHead(pieceOf(first).text, room, ctx.lang);
+          if (clipped) {
+            all[first] = { ...all[first], text: clipped, kind: all[first].kind === 'code' ? 'sentence' : all[first].kind };
+            pieceTokens.delete(first);
+            selected.add(first);
+            included.set(N - 1, 1);
+            const md2 = render(frame);
+            if (estimateTokens(md2) <= limit) return md2;
+            drop(first);
+          }
+        }
+      }
+      return md;
+    }
+  }
+  return clipHead(`# ${conv.title || conv.siteName}\n`, Math.max(1, limit), ctx.lang);
 }
 
 interface BuildCtx {
@@ -424,6 +678,8 @@ interface BuildCtx {
   pastExtra: number;
   /** Shrinks the per-message transcript caps when the fixed sections alone exceed the budget. */
   recentScale: number;
+  /** Leave out the optional sections (earlier context, code, files, links, lists) to fit a small budget. */
+  squeeze: boolean;
   sourceTokens: number;
   msgTokens: Float64Array;
   msgUnitStart: Int32Array;
@@ -460,8 +716,8 @@ export function transcriptBody(msg: Conversation['messages'][number], lang: 'ko'
 }
 
 const REQUEST_CHARS = 240;
-/** Request lines when the full transcript follows (index mode). */
-const INDEX_REQUEST_CHARS = 120;
+/** Tokens of one transcript message header and the blank lines around it. */
+const MSG_HEADER_TOKENS = 16;
 const LEAD_CHARS = 220;
 
 function clipLine(text: string, max: number): { text: string; clipped: boolean } {
@@ -498,29 +754,41 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const unitsOf = (m: number) => Array.from({ length: ctx.msgUnitStart[m + 1] - ctx.msgUnitStart[m] }, (_, k) => ctx.msgUnitStart[m] + k);
   const all = Array.from({ length: U }, (_, i) => i);
 
-  const fullMode = ctx.budgetTokens != null ? ctx.sourceTokens <= ctx.budgetTokens : ctx.sourceTokens <= FULL_MODE_TOKENS;
-  const capBudget = ctx.budgetTokens ?? (fullMode ? MAX_BUDGET : handoffBudget(ctx.sourceTokens));
-  // The whole conversation follows verbatim: the sections only point into it.
-  const indexMode = fullMode && ctx.layout.fullIndex;
-  const cap = (per: number, min: number, max: number) => Math.round(Math.min(max, Math.max(min, capBudget / per)));
+  // Every conversation is condensed to its budget (v1.3.8: short ones used to be included whole,
+  // which made the handoff larger than the full export).
+  const capBudget = Math.max(1, ctx.budgetTokens ?? handoffBudget(ctx.sourceTokens));
+  const squeeze = ctx.squeeze;
+  // The fixed minimums below were set for budgets of 8k+; a short conversation's small budget
+  // scales them down so the document still fits (k = 1 from 8k up, so long chats are unchanged).
+  const k = Math.min(1, capBudget / MIN_BUDGET);
+  const kMin = (n: number) => Math.max(1, Math.round(n * k));
+  const cap = (per: number, min: number, max: number) => Math.round(Math.min(max, Math.max(kMin(min), capBudget / per)));
   const MAX_DONE = cap(600, 10, 40);
   const MAX_OPEN = cap(500, 12, 50);
   const MAX_FAIL = cap(1500, 6, 20);
   const MAX_REQ = cap(600, 10, 40);
-  const MAX_REQUESTS = fullMode ? 60 : cap(400, 20, 60);
-  const MAX_LINKS = fullMode ? 20 : cap(1000, 8, 40);
-  const MAX_FILES = fullMode ? 40 : cap(ctx.layout.filesPer, 6, 40);
-  const MAX_COMMANDS = fullMode ? 25 : cap(700, 8, 25);
+  const MAX_REQUESTS = cap(400, 20, 60);
+  const MAX_LINKS = squeeze ? 0 : cap(1000, 8, 40);
+  const MAX_FILES = squeeze ? 0 : cap(ctx.layout.filesPer, 6, 40);
+  const MAX_COMMANDS = squeeze ? 0 : cap(700, 8, 25);
+  const MAX_NEXT = squeeze ? 2 : Math.max(2, Math.round(15 * k));
+  /** The latest requests are kept even when the request list is over its share. */
+  const LATEST_REQUESTS = kMin(12);
+  const requestChars = Math.round(Math.max(80, Math.min(REQUEST_CHARS, capBudget * 0.03)));
   /** One long answer must not flood a section: at most this many items per assistant message. */
   const PER_MESSAGE = 4;
   // Token shares of the budget per section (compressed mode). Each section is filled by priority
   // until its share is used, so the whole document stays near the budget instead of growing with
   // every extra signal. Decisions and constraints are never cut by these shares.
-  const share = (f: number) => (fullMode ? Infinity : capBudget * f * ctx.layout.listScale);
+  const share = (f: number) => (squeeze ? 0 : capBudget * f * ctx.layout.listScale);
   // Transcript caps per message shrink with the budget (the cut-out middle stays selectable).
   const scaledCap = (cap: number, s: number, floor: number) => (s > 0 ? Math.round(Math.min(cap, Math.max(floor, capBudget * s))) : cap);
-  const lastMsgCap = Math.max(400, Math.round(scaledCap(ctx.layout.lastMsgCap, ctx.layout.lastMsgShare, 400) * ctx.recentScale));
-  const recentMsgCap = Math.max(250, Math.round(scaledCap(ctx.layout.recentMsgCap, ctx.layout.recentMsgShare, 250) * ctx.recentScale));
+  // The last two messages may take up to ~1/3 of the budget each (2,500 tokens from 8k up).
+  const lastFloor = Math.round(400 * k);
+  const recentFloor = Math.round(250 * k);
+  const lastCap0 = Math.min(ctx.layout.lastMsgCap, Math.round(capBudget * ctx.layout.lastMsgMaxShare));
+  const lastMsgCap = Math.max(lastFloor * ctx.recentScale, Math.round(scaledCap(lastCap0, ctx.layout.lastMsgShare, lastFloor) * ctx.recentScale));
+  const recentMsgCap = Math.max(recentFloor * ctx.recentScale, Math.round(scaledCap(ctx.layout.recentMsgCap, ctx.layout.recentMsgShare, recentFloor) * ctx.recentScale));
   const lineTokens = (text: string, max = 220) => estimateTokens(text.length > max ? text.slice(0, max) : text) + 8;
   /** Keeps the highest-priority indices (given in priority order) within maxTok; returns them in document order. */
   const fit = (byPriority: number[], maxTok: number, max = 220) => {
@@ -538,13 +806,13 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   // Recent window (verbatim transcript) is decided first: the request flow adds the AI's lead
   // sentence only for turns that are not already in the transcript.
   let recentFrom = N;
-  if (fullMode) recentFrom = 0;
-  else {
+  {
     const { recentShare, recentMin } = ctx.layout;
-    const recentBudget = Math.max(recentMin, capBudget * recentShare);
+    const recentBudget = Math.max(recentMin * k, capBudget * recentShare) * ctx.recentScale;
     let usedTok = 0;
     for (let m = N - 1; m >= 0; m--) {
-      const tok = ctx.msgTokens[m];
+      // Each message also costs its header line ("### [#m12] 사용자 · 2026-10-21 14:44").
+      const tok = ctx.msgTokens[m] + MSG_HEADER_TOKENS;
       const mustKeep = N - m <= 2;
       if (!mustKeep && usedTok + Math.min(tok, recentMsgCap) > recentBudget) break;
       usedTok += Math.min(tok, mustKeep ? lastMsgCap : recentMsgCap);
@@ -558,7 +826,11 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   if (firstUser >= 0) {
     const firstUnits = unitsOf(firstUser).filter((i) => isProse(units[i]));
     const firstText = firstUnits.map((i) => units[i].text).join(' ');
-    const picks = estimateTokens(firstText) <= 350 ? firstUnits : [...firstUnits].sort((x, y) => score[y] - score[x]).slice(0, 5).sort((x, y) => x - y);
+    const goalMax = Math.max(60, Math.min(350, capBudget * 0.12));
+    const top = [...firstUnits].sort((x, y) => score[y] - score[x]).slice(0, 5);
+    // A small budget keeps the strongest sentences of a long first request that fit its share.
+    const fitted = k < 1 ? fit(top, goalMax, 600) : top.sort((x, y) => x - y);
+    const picks = estimateTokens(firstText) <= goalMax ? firstUnits : fitted.length ? fitted : top.slice(0, 1);
     for (const i of picks) {
       goal.push(item(i));
       take(i);
@@ -596,7 +868,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   }
   let keptReq = userMsgs;
   if (userMsgs.length > MAX_REQUESTS) {
-    const latest = new Set(userMsgs.slice(-12));
+    const latest = new Set(userMsgs.slice(-LATEST_REQUESTS));
     const msgScore0 = (m: number) => Math.max(0, ...unitsOf(m).map((i) => score[i]));
     const rest = userMsgs.filter((m) => !latest.has(m)).sort((x, y) => msgScore0(y) - msgScore0(x)).slice(0, MAX_REQUESTS - latest.size);
     const keep = new Set([...rest, ...latest]);
@@ -604,12 +876,11 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   }
   const msgScore = (m: number) => Math.max(0, ...unitsOf(m).map((i) => score[i]));
   let reqs0 = keptReq.map((m) => {
-    const { text, clipped } = clipLine(bulletText(messageText(conv.messages[m])), indexMode ? INDEX_REQUEST_CHARS : REQUEST_CHARS);
+    const { text, clipped } = clipLine(bulletText(messageText(conv.messages[m])), requestChars);
     // The lead sentence of the answer gives the next AI the outcome of each turn in one line.
-    // (Not in index mode: the whole answer follows in the transcript.)
     let leadIdx = -1;
     const reply = m + 1 < N && conv.messages[m + 1].role === 'assistant' ? m + 1 : -1;
-    if (reply >= 0 && reply < recentFrom && !indexMode) {
+    if (reply >= 0 && reply < recentFrom && !squeeze) {
       const cand = unitsOf(reply).filter((i) => isLine(units[i]) && !(flags[i] & F.POLITE) && units[i].text.length >= 15);
       leadIdx = cand.slice(0, 8).find((i) => flags[i] & F.LEAD) ?? cand[0] ?? -1;
     }
@@ -628,7 +899,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       }
     }
     if (total > limit) {
-      const latest = new Set(reqs0.slice(-12).map((r) => r.m));
+      const latest = new Set(reqs0.slice(-LATEST_REQUESTS).map((r) => r.m));
       const drop = new Set<number>();
       for (const r of [...reqs0].filter((x) => !latest.has(x.m)).sort((x, y) => msgScore(x.m) - msgScore(y.m))) {
         if (total <= limit) break;
@@ -721,7 +992,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   // Decisions and constraints share ruleShare of the budget: decisions may use half of it, and
   // constraints get the rest, so a long list of decisions never pushes prohibitions out.
   const MAX_DECISIONS = 60;
-  const ruleBudget = fullMode ? Infinity : capBudget * ctx.layout.ruleShare;
+  const ruleBudget = capBudget * ctx.layout.ruleShare;
   const ruleCost = (i: number) => lineTokens(units[i].text, 600) + 6;
   let decLeft = ruleBudget / 2;
   const keptDecs: Dec[] = [];
@@ -733,7 +1004,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   }
   keptDecs.sort((x, y) => x.i - y.i);
   const keptSuperseded: Dec[] = [];
-  for (const d of decs.filter((x) => x.status === 'superseded').slice(-30).reverse()) {
+  for (const d of squeeze ? [] : decs.filter((x) => x.status === 'superseded').slice(-30).reverse()) {
     const c = ruleCost(d.i) + 10;
     if (c > decLeft) continue;
     decLeft -= c;
@@ -855,7 +1126,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       if (!next.some((n) => n.text === bulletText(u.text))) next.push(item(i));
     }
   }
-  const nextTrim = next.slice(-15);
+  const nextTrim = next.slice(-MAX_NEXT);
   for (const it of nextTrim) {
     const i = ctx.msgUnitStart[it.m] + unitsOf(it.m).findIndex((k) => bulletText(units[k].text) === it.text);
     if (i >= 0) take(i);
@@ -935,14 +1206,13 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
 
   // ---------- current state: key sentences of the last answer not shown elsewhere ----------
   const lastAssistantKey: Item[] = [];
-  // In index mode the last answer is in the transcript in full; the section points to it.
-  if (lastAssistant >= 0 && !indexMode) {
+  if (lastAssistant >= 0) {
     const idx = unitsOf(lastAssistant).filter((i) => isLine(units[i]) && !(flags[i] & F.POLITE) && !isUsed(i) && !isLabel(i));
     const weight = (i: number) => score[i] + (flags[i] & F.LEAD ? 2 : 0) + (/\*\*[^*]+\*\*/.test(units[i].text) ? 0.6 : 0);
     // The last answer is in the transcript below; unless it is clipped there, two key sentences
     // are enough here (more would only repeat it).
-    const shownWhole = !fullMode && ctx.msgTokens[lastAssistant] <= lastMsgCap;
-    const picked = [...idx].sort((x, y) => weight(y) - weight(x)).slice(0, shownWhole ? 2 : 6).sort((x, y) => x - y);
+    const shownWhole = ctx.msgTokens[lastAssistant] <= lastMsgCap;
+    const picked = [...idx].sort((x, y) => weight(y) - weight(x)).slice(0, shownWhole || squeeze ? 2 : kMin(6)).sort((x, y) => x - y);
     for (const i of picked) {
       take(i);
       lastAssistantKey.push(item(i));
@@ -1010,29 +1280,22 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   const linksOmitted = Math.max(0, rankedLinks.length - links.length);
 
   // ---------- budgeted sections ----------
-  const full = fullMode;
-  const budget = full ? Infinity : capBudget;
-  const fixedTokens = estimateTokens(
-    [...goal, ...decisions, ...superseded, ...constraints, ...requirements, ...done, ...openTrim, ...nextTrim, ...failures, ...lastAssistantKey]
-      .map((x) => x.text)
-      .concat(requests.map((r) => `${r.text} ${r.lead?.text ?? ''}`))
-      .join('\n'),
-  );
+  const budget = capBudget;
 
-  // Recent raw messages (verbatim), or the whole conversation when it is short.
+  // Recent raw messages (verbatim).
   const recent: RecentMessage[] = [];
   const recentClipped = new Set<number>();
   const hiddenInRecent = new Set<number>();
   for (let m = recentFrom; m < N; m++) {
     const msg = conv.messages[m];
     let body = transcriptBody(msg, ctx.lang);
-    const limit = full ? Infinity : N - m <= 2 ? lastMsgCap : recentMsgCap;
+    const limit = N - m <= 2 ? lastMsgCap : recentMsgCap;
     let clipped = false;
     if (estimateTokens(body) > limit) {
       body = clipMarkdown(body, limit, ctx.lang);
       clipped = true;
     }
-    recent.push({ m, role: msg.role, model: msg.model, time: msg.created_at, body, clipped });
+    recent.push({ m, role: msg.role, time: msg.created_at, body, clipped });
     if (clipped) {
       recentClipped.add(m);
       if (!ctx.layout.clippedExcerpts) continue;
@@ -1059,8 +1322,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
   // (PDFs, images) are listed so the next AI can ask for them.
   const attachments: AttachmentItem[] = [];
   let attachmentsMore = 0;
-  let attachTokens = 0;
-  if (ctx.layout.attachShare > 0) {
+  if (ctx.layout.attachShare > 0 && !squeeze) {
     const found: AttachmentItem[] = [];
     conv.messages.forEach((msg, m) => {
       for (const c of msg.contents) {
@@ -1077,7 +1339,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     const lastUserMsg = conv.messages.map((x) => x.role).lastIndexOf('user');
     const rank = (a: AttachmentItem) => (a.m === firstUser ? 0 : a.m === lastUserMsg ? 1 : 2);
     const order = [...found].sort((x, y) => rank(x) - rank(y) || y.m - x.m);
-    let left = full ? Infinity : Math.max(400, capBudget * ctx.layout.attachShare);
+    let left = Math.max(400 * k, capBudget * ctx.layout.attachShare);
     for (const a of order) {
       const text = a.text;
       a.text = undefined;
@@ -1089,7 +1351,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       const body = stripTracking(text);
       if (a.tokens + 30 <= left) {
         a.text = body;
-      } else if (left >= 300) {
+      } else if (left >= Math.max(60, 300 * k)) {
         a.text = clipMarkdown(body, left - 30, ctx.lang);
         a.clipped = true;
       } else {
@@ -1098,22 +1360,20 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       }
       const tok = estimateTokens(a.text) + 30;
       left -= tok;
-      attachTokens += tok;
     }
     const MAX_ATTACH = 30;
     // Listed in conversation order; beyond the cap, the ones with text shown here are kept.
     const listed = found.length <= MAX_ATTACH ? found : [...found].sort((x, y) => Number(!!y.text) - Number(!!x.text) || y.m - x.m).slice(0, MAX_ATTACH);
     attachmentsMore = found.length - listed.length;
     attachments.push(...[...listed].sort((x, y) => x.m - y.m));
-    attachTokens += attachments.length * 15;
   }
 
 
   // Code: latest version of each code cluster, highest scoring first, within ~30% of budget.
   const code: CodeItem[] = [];
   const codeInRecent = new Set<number>();
-  if (!full) {
-    const codeBudget = Math.max(ctx.layout.codeMin, budget * ctx.layout.codeShare);
+  if (!squeeze) {
+    const codeBudget = Math.max(ctx.layout.codeMin * k, budget * ctx.layout.codeShare);
     // A shell block whose every line is already in the command list adds nothing.
     const listed = new Set(commands.map((c) => c.text));
     const onlyListed = (u: Unit) =>
@@ -1139,15 +1399,55 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     code.sort((x, y) => x.m - y.m);
   }
 
+  const makeDoc = (pastItems: PastItem[]): HandoffDoc => ({
+    lang: ctx.lang,
+    refIndex: ctx.layout.refIndex,
+    conv,
+    now: ctx.now,
+    sourceTokens: ctx.sourceTokens,
+    budget,
+    quoteChars: Math.round(Math.max(60, Math.min(400, budget * 0.05))),
+    lineChars: Math.round(Math.max(120, Math.min(600, budget * 0.08))),
+    goal,
+    requests,
+    requestsOmitted,
+    decisions,
+    superseded,
+    constraints,
+    requirements,
+    done,
+    open: openTrim,
+    next: nextTrim,
+    failures,
+    lastUser,
+    lastAssistant,
+    lastAssistantKey,
+    lastAssistantEmpty: lastAssistant >= 0 && !conv.messages[lastAssistant].contents.some((c) => c.type !== 'thinking' && c.type !== 'sources' && c.type !== 'tool' && (c.content?.trim() || c.imageUrl || c.imageGroup?.images.length || c.attachment)),
+    files,
+    commands,
+    links,
+    linksOmitted,
+    code,
+    codeInRecent: [...codeInRecent].sort((x, y) => x - y),
+    past: pastItems,
+    recent,
+    attachments,
+    attachmentsMore,
+    uncertainCount: uncertain,
+  });
+
   // Important past context: remaining budget filled with the best unused units before the recent
   // window. Selection is relevance-ranked and redundancy-aware (MMR-style): a candidate whose topic
   // words are already covered by what was selected adds little and is skipped.
   const past: PastItem[] = [];
-  if (!full) {
-    const used0 = fixedTokens + attachTokens + code.reduce((s, c) => s + estimateTokens(c.text), 0) + recent.reduce((s, r) => s + estimateTokens(r.body), 0);
-    // Reserve for the header, formatting and (if shown) the reference index; the render pass
-    // in runHandoff corrects the estimate either way.
-    let remaining = budget - used0 - (ctx.layout.refIndex ? 1500 : 700) + ctx.pastExtra;
+  let pastExhausted = false;
+  if (!squeeze) {
+    // Everything but the excerpts is decided: render it to know what is left (rendering takes a
+    // few ms). Section estimates missed the markup — "- … [#m12]" on every line, headers, link and
+    // file lists — and the first pass overshot by ~10% once tokens were counted at their real cost
+    // (v1.3.8); the render passes in runHandoff then rebuilt the document twice.
+    const base = estimateTokens(renderHandoff(makeDoc([])));
+    let remaining = budget - base - 12 - (ctx.layout.refIndex ? 800 : 0) + ctx.pastExtra;
     const pastItem = (k: number): PastItem => ({ text: units[k].kind === 'table' ? units[k].text : bulletText(units[k].text), m: units[k].m, u: k, role: units[k].role, table: units[k].kind === 'table' });
     // Referential completeness: an excerpt that opens with "이 방식은…", "그래서…" or "This…" is
     // hard to read without the sentence before it ("referential dangling"; in the compression lab
@@ -1168,12 +1468,38 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       }
       return chain;
     };
-    const chainCost = (ch: number[]) => ch.reduce((s2, k) => s2 + (used.has(k) ? 0 : estimateTokens(units[k].text) + 8), 0);
+    // What an excerpt costs as rendered: its line (clipped like the renderer clips it), and the
+    // "- **ChatGPT** [#m12]" line of its message the first time that message gets an excerpt.
+    const pastChars = Math.round(makeDoc([]).lineChars * 1.34);
+    const lineCost = new Map<number, number>();
+    const costOf = (k: number) => {
+      let c = lineCost.get(k);
+      if (c == null) {
+        const u = units[k];
+        c = u.kind === 'table' ? estimateTokens(u.text.replace(/^/gm, '  ')) + 4 : estimateTokens(`  - ${clipText(bulletText(u.text).replace(/\s*\n\s*/g, ' ').trim(), pastChars)}`) + 2;
+        lineCost.set(k, c);
+      }
+      return c;
+    };
+    const pastMsgs = new Set<number>();
+    const groupCost = (m: number) => estimateTokens(`- **${conv.messages[m].role === 'user' ? '사용자' : conv.siteName}** [#m${m + 1}]`) + 2;
+    const chainCost = (ch: number[]) => {
+      let c = 0;
+      const msgs = new Set<number>();
+      for (const k of ch) {
+        if (used.has(k)) continue;
+        c += costOf(k);
+        if (!pastMsgs.has(units[k].m)) msgs.add(units[k].m);
+      }
+      for (const m of msgs) c += groupCost(m);
+      return c;
+    };
     const takeChain = (ch: number[]) => {
+      remaining -= chainCost(ch);
       for (const k of ch) {
         if (used.has(k)) continue;
         take(k);
-        remaining -= estimateTokens(units[k].text) + 8;
+        pastMsgs.add(units[k].m);
         past.push(pastItem(k));
       }
     };
@@ -1206,27 +1532,7 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
     if (ctx.selection === 'coverage') {
       // Document-level coverage: concepts the handoff already shows (decisions, requests, recent
       // transcript…) count as covered, so earlier context adds what is still missing.
-      const df = new Map<string, number>();
-      const tfAll = new Map<string, number>();
-      const byUser = new Set<string>();
-      for (let m = 0; m < N; m++) {
-        const seen = new Set<string>();
-        for (const i of unitsOf(m)) {
-          if (!isProse(units[i])) continue;
-          for (const t of topics(i)) {
-            seen.add(t);
-            tfAll.set(t, (tfAll.get(t) ?? 0) + 1);
-            if (units[i].role === 'user') byUser.add(t);
-          }
-        }
-        for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
-      }
-      const idf = (t: string) => Math.log((N + 1) / ((df.get(t) ?? 0) + 1)) + 1;
-      const weight = (c: string) => {
-        const parts = c.split(' ');
-        const base = parts.length === 1 ? idf(c) : 0.5 * (idf(parts[0]) + idf(parts[1]));
-        return base * (1 + Math.log(tfAll.get(parts[0]) ?? 1)) * (byUser.has(parts[0]) ? 1.5 : 1);
-      };
+      const weight = conceptWeight(units, topics, ctx.msgUnitStart, N);
       const covered = new Set<string>();
       for (const i of used) for (const c of conceptsOf(topics(i))) covered.add(c);
       for (let m = recentFrom; m < N; m++) for (const i of unitsOf(m)) if (isProse(units[i]) && !hiddenInRecent.has(i)) for (const c of conceptsOf(topics(i))) covered.add(c);
@@ -1264,43 +1570,35 @@ function buildDocument(conv: Conversation, a: Analysis, ctx: BuildCtx): HandoffD
       for (const t of tt) covered.set(t, (covered.get(t) ?? 0) + 1);
     }
     past.sort((x, y) => x.u - y.u);
+    // Nothing left that fits a larger budget: the render passes need not try one.
+    pastExhausted = remaining > 0 && cand.every((i) => isUsed(i) || chainCost(chainOf(i)) > remaining + 64);
   }
 
-  return {
-    lang: ctx.lang,
-    mode: full ? 'full' : 'compressed',
-    index: indexMode,
-    refIndex: ctx.layout.refIndex,
-    conv,
-    now: ctx.now,
-    sourceTokens: ctx.sourceTokens,
-    budget: full ? null : budget,
-    goal,
-    requests,
-    requestsOmitted,
-    decisions,
-    superseded,
-    constraints,
-    requirements,
-    done,
-    open: openTrim,
-    next: nextTrim,
-    failures,
-    lastUser,
-    lastAssistant,
-    lastAssistantKey,
-    lastAssistantEmpty: lastAssistant >= 0 && !conv.messages[lastAssistant].contents.some((c) => c.type !== 'thinking' && c.type !== 'sources' && c.type !== 'tool' && (c.content?.trim() || c.imageUrl || c.imageGroup?.images.length || c.attachment)),
-    files,
-    commands,
-    links,
-    linksOmitted,
-    code,
-    codeInRecent: [...codeInRecent].sort((x, y) => x - y),
-    past,
-    recent,
-    attachments,
-    attachmentsMore,
-    uncertainCount: uncertain,
+  return { ...makeDoc(past), pastExhausted };
+}
+
+/** Concept weight for coverage: IDF over messages × log frequency, ×1.5 for words the user used. */
+function conceptWeight(units: Unit[], topics: (i: number) => string[], msgUnitStart: Int32Array, N: number): (c: string) => number {
+  const df = new Map<string, number>();
+  const tfAll = new Map<string, number>();
+  const byUser = new Set<string>();
+  for (let m = 0; m < N; m++) {
+    const seen = new Set<string>();
+    for (let i = msgUnitStart[m]; i < msgUnitStart[m + 1]; i++) {
+      if (!isProse(units[i])) continue;
+      for (const t of topics(i)) {
+        seen.add(t);
+        tfAll.set(t, (tfAll.get(t) ?? 0) + 1);
+        if (units[i].role === 'user') byUser.add(t);
+      }
+    }
+    for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const idf = (t: string) => Math.log((N + 1) / ((df.get(t) ?? 0) + 1)) + 1;
+  return (c: string) => {
+    const parts = c.split(' ');
+    const base = parts.length === 1 ? idf(c) : 0.5 * (idf(parts[0]) + idf(parts[1]));
+    return base * (1 + Math.log(tfAll.get(parts[0]) ?? 1)) * (byUser.has(parts[0]) ? 1.5 : 1);
   };
 }
 
@@ -1339,7 +1637,9 @@ export function repeatNote(n: number, ms: number[], lang: 'ko' | 'en'): string {
  * compared as one block. A line counts as repeated when it is the same after normalization, or
  * nearly the same (≥ 85% of its words shared with a later line of similar length). Short lines
  * (headings, labels, "가격: 3만원") are never matched loosely: inside a run they are dropped only
- * when a later message has the same line, otherwise they end the run and stay.
+ * when a later message has the same line, otherwise they end the run and stay. Table rows are
+ * never dropped (a table without its header row is no table), and a run stays as it was when the
+ * note would be longer than the lines it replaces (v1.3.8).
  */
 export function collapseRepeats(recent: Array<{ m: number; role: string; body: string }>, lang: 'ko' | 'en'): void {
   // A user's line only collapses into a later user message (their own revised paste), so what the
@@ -1389,20 +1689,31 @@ export function collapseRepeats(recent: Array<{ m: number; role: string; body: s
     const short: string[] = [];
     let run = 0;
     let runM: number[] = [];
+    let runLines: string[] = [];
     let pending: string[] = [];
     let collapsed = false;
     const flush = () => {
       if (run) {
-        out.push(repeatNote(run, runM, lang));
-        collapsed = true;
+        const note = repeatNote(run, runM, lang);
+        if (estimateTokens(note) < estimateTokens(runLines.join('\n'))) {
+          out.push(note);
+          collapsed = true;
+        } else out.push(...runLines);
       }
       run = 0;
       runM = [];
+      runLines = [];
       out.push(...pending);
       pending = [];
     };
     for (const b of blocks) {
       const key = lineKey(b);
+      if (/^\s{0,3}\|/.test(b)) {
+        flush();
+        out.push(b);
+        if (key.length >= REPEAT_MIN) own.push(key);
+        continue;
+      }
       if (key.length < REPEAT_MIN) {
         if (key) short.push(key);
         // Blank lines and short lines a later message also has belong to a run around them.
@@ -1419,6 +1730,7 @@ export function collapseRepeats(recent: Array<{ m: number; role: string; body: s
       if (m != null) {
         // One note per run, even when its lines are repeated in different later messages.
         run += b.split('\n').length + pending.filter((x) => x.trim()).length;
+        runLines.push(...pending, b);
         pending = [];
         runM.push(m);
         continue;
