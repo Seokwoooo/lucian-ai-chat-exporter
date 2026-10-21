@@ -164,7 +164,11 @@ describe('the two user-reported shapes (2026-10, synthetic mirrors)', () => {
             '## 2. 실제로 얼마나 쓸 수 있나?',
             '공식적으로는 **정확한 주간 요청 횟수나 토큰 한도를 공개하지 않았습니다.** 사용자 보고로는 복잡한 작업으로 1~3시간 만에 주간 한도를 소진했다는 이야기가 있습니다.',
             '## 3. 내 사용량 확인 방법',
-            '터미널에서 CLI를 열고 `/usage` 명령을 입력하면 남은 주간 할당량과 초기화 시점을 볼 수 있습니다. `/quota`도 같은 명령입니다.',
+            '1. 터미널을 열고 다음 명령어를 입력하세요.',
+            '```bash\nexamplecli\n```',
+            '2. CLI가 열리면 아래 명령을 입력합니다.',
+            '```text\n/usage\n```',
+            '남은 주간 할당량과 초기화 시점을 볼 수 있습니다. `/quota`도 같은 명령입니다.',
             '**결론:** 웹에서 많이 써도 CLI의 주간 할당량은 줄어들지 않습니다. 다만 CLI 쪽 한도는 빨리 소진될 수 있으니 중요한 작업에 아껴 쓰세요.',
           ].join('\n\n'),
         ),
@@ -188,9 +192,9 @@ describe('the two user-reported shapes (2026-10, synthetic mirrors)', () => {
     'grok',
   );
 
-  for (const [name, c, key] of [
-    ['ChatGPT search answer + English screen paste', search, /별도입니다!|각각 따로 계산됩니다/],
-    ['Grok market chat', market, /26\.8%/],
+  for (const [name, c, key, code] of [
+    ['ChatGPT search answer + English screen paste', search, /별도입니다!|각각 따로 계산됩니다/, ['다음 명령어를 입력하세요.\n\n```bash\nexamplecli\n```', '```text\n/usage\n```']],
+    ['Grok market chat', market, /26\.8%/, []],
   ] as const) {
     it(`${name}: condensed, Korean, ≤ 2/3 of the export, keeps the first answer's point`, () => {
       const r = runHandoff(c, { now: NOW });
@@ -200,6 +204,8 @@ describe('the two user-reported shapes (2026-10, synthetic mirrors)', () => {
       expect(r.stats.outputTokens).toBeLessThanOrEqual(Math.floor(r.stats.sourceTokens * FULL_EXPORT_SHARE * BUDGET_TOLERANCE));
       for (const f of full) expect(o200k(r.markdown).length).toBeLessThan(o200k(f).length * 0.8);
       expect(r.markdown).toMatch(key);
+      // Short commands stay, with the sentence that leads into them (ChatGPT code widgets, 2026-10-21).
+      for (const k of code) expect(r.markdown).toContain(k);
       // The last exchange is there, and the first request.
       expect(r.markdown).toContain(`### [#m${c.messages.length}] ${c.siteName}`);
       expect(r.markdown).toContain('### [#m1] 사용자');

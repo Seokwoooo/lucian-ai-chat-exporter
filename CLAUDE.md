@@ -121,6 +121,10 @@ popup            src/popup/*                two cards: handoff button, export fo
 - Grok (2026-10): the first question's parent is a hidden empty `system` response missing from
   `response-node`; paths walk listed nodes only. Failed answers carry only `streamErrors` and are
   kept as the notice grok.com shows (`> **Grok error:** …`).
+- ChatGPT (2026-10): fenced code blocks carry `client_defined_widget` content references
+  (`category: "code_block"`, `data.content`, empty `alt`) whose `matched_text` is the fence itself;
+  keep it (replacing it with the empty alt deleted every command). The condensed handoff takes short
+  code blocks together with the sentence that leads into them.
 - `scripts/compression-lab/` compares selection algorithms; results are in `docs/compression-lab.md`.
   The engine's `DEFAULT_SELECTION` (coverage) and `DEFAULT_LAYOUT` were chosen there — re-run the
   lab (`npm run lab`, and `npm run lab:qa -- presence` for the QA evaluation; `qa/ask.mjs` uses a reader

@@ -312,6 +312,18 @@ export function applyContentReferences(text: string, refs: Json[] | undefined, i
     }
     if (ref.type === 'hidden' || ref.type === 'sources_footnote') return '';
     if (typeof ref.alt === 'string' && ref.alt.trim()) return ref.alt;
+    // Answer parts ChatGPT draws as client widgets (2026-10: code blocks with a copy button,
+    // category "code_block") are visible text: the reference covers the fenced code itself, and its
+    // empty alt used to delete the commands from every document (user report, 2026-10-21).
+    if (ref.type === 'client_defined_widget') {
+      if (!/[\ue000-\uf8ff]/.test(ref.matched_text)) return ref.matched_text;
+      const code = ref.data?.content;
+      if (typeof code === 'string' && code.trim()) {
+        const lang = typeof ref.data?.language === 'string' && /^[\w+#.-]{1,24}$/.test(ref.data.language) ? ref.data.language : '';
+        const fence = '`'.repeat(Math.max(3, ...(code.match(/`+/g) ?? []).map((t: string) => t.length + 1)));
+        return `\n${fence}${lang}\n${code.replace(/\n$/, '')}\n${fence}\n`;
+      }
+    }
     const first = (ref.items ?? [])[0];
     if (first?.url) return ` ([${first.attribution || first.title || 'source'}](${first.url}))`;
     if (ref.type === 'entity' && typeof ref.name === 'string') return ref.name;

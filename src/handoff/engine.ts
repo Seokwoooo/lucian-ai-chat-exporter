@@ -576,12 +576,19 @@ function buildCondensed(conv: Conversation, a: Analysis, ctx: BuildCtx, limit: n
   const frames = CONDENSED_FRAMES.slice(frameAt < 0 ? CONDENSED_FRAMES.length - 1 : frameAt);
   let used = estimateTokens(render(frames[0]));
   const costOf = (i: number) => tok(i) + (included.get(all[i].m) ? 0 : headerTokens(all[i].m));
+  const nextInMsg = new Map<number, number>();
+  for (const ids of byMsg) for (let k = 0; k + 1 < ids.length; k++) nextInMsg.set(ids[k], ids[k + 1]);
+  const companionMax = Math.max(24, limit * 0.04);
   const take = (i: number, must: boolean) => {
     used += costOf(i);
     selected.add(i);
     order.push(i);
     if (must) mandatory.add(i);
     included.set(all[i].m, (included.get(all[i].m) ?? 0) + 1);
+    // A short code block right after a chosen sentence ("enter this command:") goes with it: the
+    // sentence says little without it, and the command costs a few tokens (user report, 2026-10-21).
+    const j = nextInMsg.get(i);
+    if (j != null && all[i].kind !== 'code' && all[j].kind === 'code' && !selected.has(j) && eligible(j) && tok(j) <= companionMax && used + costOf(j) <= limit) take(j, must);
   };
   const content = Math.max(0, limit - used);
   // Heads of the messages the next AI needs most: what fits of each, in order. The first unit may
@@ -609,6 +616,25 @@ function buildCondensed(conv: Conversation, a: Analysis, ctx: BuildCtx, limit: n
   const userMsgs: number[] = [];
   for (let m = N - 1; m >= 0; m--) if (conv.messages[m].role === 'user' && m !== lastUser && m !== firstUser) userMsgs.push(m);
   for (const m of userMsgs) head([m], content * 0.06);
+  // Short code blocks (commands, snippets) with the sentence that leads into them, newest first:
+  // the sections form keeps code in a section of its own; here it stays in place.
+  const codeShare = content * 0.12;
+  const leadMax = Math.max(60, content * 0.06);
+  let codeUsed = 0;
+  for (let m = N - 1; m >= 0 && codeUsed < codeShare; m--) {
+    const ids = byMsg[m];
+    for (let k = ids.length - 1; k >= 0; k--) {
+      const j = ids[k];
+      if (all[j].kind !== 'code' || selected.has(j) || !eligible(j) || tok(j) > companionMax) continue;
+      const p = k > 0 ? ids[k - 1] : -1;
+      const lead = p >= 0 && all[p].kind !== 'code' && free(p) && !selected.has(p) && tok(p) <= leadMax ? p : -1;
+      const c = costOf(j) + (lead >= 0 ? tok(lead) : 0);
+      if (codeUsed + c > codeShare || used + c > limit) continue;
+      take(lead >= 0 ? lead : j, false);
+      if (!selected.has(j)) take(j, false);
+      codeUsed += c;
+    }
+  }
   // Concept coverage over everything else.
   const weight = conceptWeight(units, (i) => topics(i), ctx.msgUnitStart, N);
   const covered = new Set<string>();

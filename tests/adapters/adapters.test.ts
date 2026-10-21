@@ -13,6 +13,7 @@ import {
   CLAUDE_ID,
   GEMINI_ID,
   GROK_ID,
+  chatgptCodeWidgetConversation,
   chatgptConversation,
   chatgptModernConversation,
   chatgptRichSearchConversation,
@@ -113,6 +114,20 @@ describe('ChatGPT adapter', () => {
     expect(buildVerification(rich, 'md').checks).toContainEqual({ code: 'sources.uncited', status: 'info', params: { n: 117 } });
     expect(buildVerification(rich, 'json').checks.some((c) => c.code === 'sources.uncited')).toBe(false);
     expect(conversationToMarkdown(rich, { locale: 'ko' }).text).not.toContain('search.example');
+  });
+
+  it('keeps code blocks that carry a client widget reference (real search answer, 2026-10-21)', () => {
+    const conv = parseChatGPTConversation(chatgptCodeWidgetConversation(), { conversationId: CHATGPT_ID, url: `https://chatgpt.com/c/${CHATGPT_ID}` });
+    const md = conv.messages[1].contents.find((c) => c.type === 'markdown')!.content!;
+    expect(md).toContain('터미널을 열고 다음 명령어를 입력하세요.\n\n```bash\nexamplecli\n```\n\n도구가 열리면');
+    expect(md).toContain('```text\n/usage\n```');
+    expect(md).toContain('([docs.example.com](https://docs.example.com/cli/usage))');
+    const doc = conversationToMarkdown(conv, { locale: 'ko' }).text;
+    expect(doc).toContain('```bash\nexamplecli\n```');
+    expect(doc).toContain('```text\n/usage\n```');
+    // A widget over private-use marker text is rendered from its data instead.
+    const r = applyContentReferences('a \ue200widget\ue202x\ue201 b', [{ type: 'client_defined_widget', category: 'code_block', data: { content: 'npm test', language: 'bash' }, matched_text: '\ue200widget\ue202x\ue201', start_idx: 2, end_idx: 13, alt: '' }]);
+    expect(r.text).toContain('```bash\nnpm test\n```');
   });
 
   it('strips unmatched private-use citation markers', () => {

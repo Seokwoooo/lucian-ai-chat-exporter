@@ -300,3 +300,53 @@ export function chatgptRichSearchConversation() {
   });
   return { title: '조사', create_time: t(20), update_time: t(21), mapping, current_node: 'final', default_model_slug: 'gpt-6-thinking' };
 }
+
+/**
+ * ChatGPT answer whose code blocks carry a client widget reference (seen 2026-10-21 on a real
+ * search answer; text here is synthetic): `client_defined_widget` with category "code_block" and
+ * data {content, language}, matched_text = the fenced block, alt = "". The adapter used to put the
+ * empty alt in place of the block, so the commands vanished from every export and the handoff.
+ */
+export function chatgptCodeWidgetConversation() {
+  const answer = [
+    '## 3. 사용량 확인 방법',
+    '',
+    '터미널을 열고 다음 명령어를 입력하세요.',
+    '',
+    '```bash',
+    'examplecli',
+    '```',
+    '',
+    '도구가 열리면 다음 명령어를 입력하면 됩니다.',
+    '',
+    '```text',
+    '/usage',
+    '```',
+    '',
+    '`/quota`도 동일한 명령어입니다. <Cite ref="turn0search0"/>',
+    '',
+    '공식 문서: <Link url="https://docs.example.com/plans">요금제와 한도</Link>',
+  ].join('\n');
+  const widget = (code: string, language: string) => {
+    const matched = `\`\`\`${language}\n${code}\n\`\`\``;
+    const start = answer.indexOf(matched);
+    return { type: 'client_defined_widget', category: 'code_block', data: { content: code, language, widget_type: 'code_block' }, matched_text: matched, start_idx: start, end_idx: start + matched.length, safe_urls: [], refs: [], alt: '', prompt_text: null };
+  };
+  const entry = { type: 'search_result', url: 'https://docs.example.com/cli/usage', title: 'CLI usage', snippet: 's', ref_id: { turn_index: 0, ref_type: 'search', ref_index: 0 } };
+  const msg = (id: string, role: string, content: unknown, metadata: Record<string, unknown> = {}) => ({ id, author: { role, name: null }, create_time: t(30), content, metadata, recipient: 'all', channel: role === 'assistant' ? 'final' : null });
+  const mapping: Record<string, unknown> = {
+    root: { id: 'root', parent: null, children: ['u1'], message: null },
+    u1: { id: 'u1', parent: 'root', children: ['final'], message: msg('u1', 'user', { content_type: 'text', parts: ['사용량은 어떻게 확인해?'] }) },
+    final: {
+      id: 'final',
+      parent: 'u1',
+      children: [],
+      message: msg('final', 'assistant', { content_type: 'text', parts: [answer] }, {
+        model_slug: 'gpt-6-thinking',
+        search_result_groups: [{ type: 'search_result_group', domain: 'docs.example.com', entries: [entry] }],
+        content_references: [widget('examplecli', 'bash'), widget('/usage', 'text'), { type: 'hidden', matched_text: '', start_idx: 0, end_idx: 0, safe_urls: [] }],
+      }),
+    },
+  };
+  return { title: '사용량 확인', create_time: t(30), update_time: t(31), mapping, current_node: 'final', default_model_slug: 'gpt-6-thinking' };
+}
