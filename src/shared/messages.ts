@@ -3,6 +3,7 @@
 
 import type { BranchMessages, Conversation, ExportFormat, ExportMessage, JobKind, JobState, JobTimings, MdImageMode, Verification, HandoffStats } from './types';
 import type { Locale } from './i18n';
+import type { CopyTail } from './saved-copy';
 
 export const COLLECT_PORT = 'lucian-collect';
 
@@ -14,7 +15,10 @@ export interface AssetRequest {
 }
 
 /** Messages the service worker sends to the content script over the collect port. */
-export type ToContent = { type: 'collect' } | { type: 'assets'; items: AssetRequest[] };
+export type ToContent =
+  /** `copy`: the newest ids of the copy an earlier run saved, so a 429 need not be waited out. */
+  | { type: 'collect'; copy?: CopyTail }
+  | { type: 'assets'; items: AssetRequest[] };
 
 /** Messages the content script streams back over the collect port. */
 export type FromContent =
@@ -26,7 +30,8 @@ export type FromContent =
   | { type: 'done' }
   | { type: 'asset'; key: string; ok: boolean; mime?: string; base64?: string; size?: number; error?: string }
   | { type: 'assets-done' }
-  | { type: 'error'; code: string; message?: string; retryAfterSec?: number };
+  /** `copyCurrent`: the page showed no message the saved copy lacks (asked for fetch failures only). */
+  | { type: 'error'; code: string; message?: string; retryAfterSec?: number; copyCurrent?: boolean };
 
 export type PopupRequest =
   /** tabId is omitted when the request comes from the in-page button (the sender's tab is used). */

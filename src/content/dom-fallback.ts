@@ -16,7 +16,22 @@ interface DomSpec {
   content: (el: Element, role: Role) => Element;
   /** Stable id that survives re-rendering (needed for virtualized lists). */
   key?: (el: Element) => string | null;
+  /**
+   * Server ids of the message an element shows, as the adapter stores them (checked against the
+   * API on all four sites, 2026-10-22). Used to tell whether a saved copy already holds the newest
+   * messages (src/shared/saved-copy.ts).
+   */
+  turnIds: (el: Element) => string[];
+  /** The row the site marks as the conversation's last message, when it marks one. */
+  lastRow?: string;
+  /** Parts of an answer the site draws without message ids: when one is the newest thing on the page, it cannot be compared. */
+  unidentified?: string;
+  /** A turn the site marks as still being written. */
+  busy?: string;
 }
+
+const ID = /^[\w-]{1,80}$/;
+const idsOf = (value: string | null | undefined): string[] => (value ?? '').split(/\s+/).filter((v) => ID.test(v));
 
 export const DOM_SPECS: Record<SiteId, DomSpec> = {
   chatgpt: {
@@ -35,6 +50,12 @@ export const DOM_SPECS: Record<SiteId, DomSpec> = {
       (el.hasAttribute('data-message-author-role') ? el.querySelector('.whitespace-pre-wrap') : null) ??
       el,
     key: (el) => el.getAttribute('data-chatgpt-search-unit-key') || el.getAttribute('data-message-id'),
+    // 2026-10: each block lists its mapping node ids; the older layout has one data-message-id.
+    turnIds: (el) => idsOf(el.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids') ?? el.closest('[data-message-id]')?.getAttribute('data-message-id')),
+    // 2026-10-22: the work log of a long-running answer ("Worked for 34m") follows the question
+    // with only a work-activity id, shared by several turns, so a regenerated run looks the same.
+    unidentified: '[data-local-conversation-item-target-ids]',
+    busy: '[data-talvt-turn-state]:not([data-talvt-turn-state="complete"])',
   },
   claude: {
     // claude.ai in 2026-10 renders a virtualized transcript: [data-testid="assistant-message"]
@@ -46,6 +67,9 @@ export const DOM_SPECS: Record<SiteId, DomSpec> = {
       const k = el.closest('[data-turn-key]')?.getAttribute('data-turn-key') ?? el.closest('[data-testid="transcript-row"]')?.getAttribute('data-index');
       return k ? `${el.matches('[data-testid="user-message"]') ? 'u' : 'a'}:${k}` : null;
     },
+    // data-turn-key is the message uuid; the row of the newest message carries data-last-message.
+    turnIds: (el) => idsOf(el.closest('[data-turn-key]')?.getAttribute('data-turn-key')),
+    lastRow: '[data-last-message="true"]',
   },
   gemini: {
     items: 'user-query, model-response',
@@ -54,11 +78,14 @@ export const DOM_SPECS: Record<SiteId, DomSpec> = {
       role === 'user'
         ? el.querySelector('.query-text') ?? el
         : el.querySelector('message-content .markdown') ?? el.querySelector('message-content') ?? el,
+    // Each turn sits in a .conversation-container whose id is the response id without "r_".
+    turnIds: (el) => idsOf(el.closest('.conversation-container')?.id).map((id) => (id.startsWith('r_') ? id : `r_${id}`)),
   },
   grok: {
     items: '.message-bubble',
     role: (el) => (el.closest('[class*="items-end"]') ? 'user' : 'assistant'),
     content: (el) => el,
+    turnIds: (el) => idsOf(el.closest('[id^="response-"]')?.id.slice('response-'.length)),
   },
 };
 
@@ -94,6 +121,48 @@ function scrollableAncestor(el: Element | null): HTMLElement | null {
     p = p.parentElement;
   }
   return (document.scrollingElement as HTMLElement | null) ?? null;
+}
+
+/** How far below `el` the scrollable content goes: small when the page shows the end of the chat. */
+function contentBelow(el: Element): number {
+  const scroller = scrollableAncestor(el);
+  if (!scroller) return 0;
+  const bottom = el.getBoundingClientRect().bottom;
+  const top = scroller === document.scrollingElement ? -scroller.scrollTop : scroller.getBoundingClientRect().top;
+  return scroller.scrollHeight - (bottom - top + scroller.scrollTop);
+}
+
+/** A virtualized list scrolled up leaves the newest turns unmounted, with their height as padding. */
+const END_SLACK_PX = 2000;
+
+/** True when `b` comes after `a` in the page and is not inside it. */
+const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) && !a.contains(b);
+
+/**
+ * Server ids of the newest messages on the page (the last rendered turns), or null whenever that
+ * cannot be told for sure: the list is scrolled up, a turn is still being written, the newest
+ * message is a question (its answer is missing or drawn without ids: chatgpt.com images and work
+ * logs, 2026-10-22, so a regenerated answer would go unnoticed), or one of the newest turns carries
+ * no ids. Null means "wait for the site", never "use the copy". Read only while a job runs.
+ */
+export function latestTurnIds(site: SiteId): string[] | null {
+  const spec = DOM_SPECS[site];
+  const els = outermost(renderedElements(spec.items));
+  const last = els[els.length - 1];
+  if (!last || spec.role(last) !== 'assistant') return null;
+  const marked = spec.lastRow ? document.querySelector(spec.lastRow) : null;
+  const atEnd = marked ? marked.contains(last) || last.contains(marked) || !!last.closest(spec.lastRow!) : contentBelow(last) < END_SLACK_PX;
+  if (!atEnd) return null;
+  if (spec.busy && renderedElements(spec.busy).length) return null;
+  const idless = spec.unidentified ? renderedElements(spec.unidentified).pop() : undefined;
+  if (idless && follows(last, idless)) return null;
+  const ids = new Set<string>();
+  for (const el of els.slice(-4)) {
+    const own = spec.turnIds(el);
+    if (!own.length) return null;
+    for (const id of own) ids.add(id);
+  }
+  return [...ids];
 }
 
 /** Scrolls up until no more history renders (bounded to keep the fallback responsive). */

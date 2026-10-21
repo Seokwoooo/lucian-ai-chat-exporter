@@ -27,6 +27,11 @@ export interface AdapterContext {
   bridge: Bridge;
   /** 'wait': waiting out a 429 — `done` of `total` seconds have passed. */
   progress: (label: 'messages' | 'pages' | 'wait', done: number, total?: number) => void;
+  /**
+   * True when an earlier run's saved copy already holds every message the page shows: a 429 is then
+   * not waited out, the service worker builds from that copy at once.
+   */
+  savedCopyIsCurrent?: () => boolean;
   /** Accumulates time spent waiting on the network vs. parsing. */
   timer: { networkMs: number; parseMs: number };
 }
@@ -141,6 +146,8 @@ export async function fetchWithRetry(
       const asked = retryAfterMs(res.headers.get('retry-after'));
       const error = new ExtractError('RATE_LIMIT', 'HTTP 429', asked != null ? Math.ceil(asked / 1000) : undefined);
       if (rateLimitWaitMs > 0) {
+        // Nothing to wait for when the saved copy already has everything on the page.
+        if (ctx?.savedCopyIsCurrent?.()) throw error;
         const wait = asked ?? RATE_LIMIT_BACKOFF_MS * limited;
         if (limited >= RATE_LIMIT_TRIES || waited + wait > rateLimitWaitMs) throw error;
         waited += wait;

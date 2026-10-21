@@ -67,6 +67,18 @@ describe('verification of a document built from a saved copy', () => {
     );
   });
 
+  it('a copy that holds everything on the page is a note, not a warning (nothing for the user to weigh)', () => {
+    const c = savedCopyFor('RATE_LIMIT', record(conv('api')), 35, true)!;
+    expect(c.extraction.savedCopy?.current).toBe(true);
+    const v = buildVerification(c, 'md');
+    const check = v.checks.find((x) => x.code === 'source.saved')!;
+    expect(check.status).toBe('info');
+    expect(v.level).toBe('ok');
+    expect(checkText('ko', check)).toBe('ChatGPT 서버가 요청을 잠시 막아 3분 전에 받아 둔 사본으로 만들었습니다. 화면의 마지막 메시지까지 모두 들어 있습니다');
+    expect(checkText('en', check)).toBe('ChatGPT was limiting requests, so this was built from the copy saved 3 minutes ago; it has every message up to the last one on the page');
+    expect(savedCopyFor('RATE_LIMIT', record(conv('api')), 35, false)?.extraction.savedCopy?.current).toBeUndefined();
+  });
+
   it('a fresh API result has no such check', () => {
     expect(buildVerification(conv('api'), 'md').checks.some((x) => x.code === 'source.saved')).toBe(false);
   });

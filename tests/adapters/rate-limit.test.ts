@@ -65,6 +65,17 @@ describe('fetchWithRetry and HTTP 429', () => {
     expect(fetch).toHaveBeenCalledTimes(RATE_LIMIT_TRIES);
   });
 
+  it('does not wait at all when the saved copy already holds everything on the page', async () => {
+    const fetch = answer(limited('35'), ok);
+    const c = { ...ctx(), savedCopyIsCurrent: () => true };
+    const t0 = Date.now();
+    const err = await fetchWithRetry(c, 'https://chatgpt.com/backend-api/conversation/x', { rateLimitWaitMs: 90_000 }).catch((e) => e);
+    expect(err.code).toBe('RATE_LIMIT');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(c.waits).toEqual([]);
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
   it('does not start a wait longer than the budget', async () => {
     const fetch = answer(limited('120'), ok);
     const c = ctx();

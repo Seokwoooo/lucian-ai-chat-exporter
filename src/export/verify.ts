@@ -82,12 +82,15 @@ export function buildVerification(
     checks.push({ code: 'dom.more', status: 'warn', params: { dom: ex.domUserTurns, exported: userMessages } });
   }
   if (ex.method === 'dom') checks.push({ code: 'method.dom', status: 'warn' });
-  // Built from the copy an earlier run saved: say why and how old it is (messages sent since are missing).
+  // Built from the copy an earlier run saved: say why and how old it is. When the page showed no
+  // message the copy lacks it is complete, so this is only a note; otherwise messages sent since may
+  // be missing, a warning.
   if (ex.savedCopy) {
+    const current = !!ex.savedCopy.current;
     checks.push({
       code: 'source.saved',
-      status: 'warn',
-      params: { site: conv.siteName, reason: ex.savedCopy.reason, mins: Math.max(0, Math.floor((Date.now() - ex.fetchedAt) / 60_000)) },
+      status: current ? 'info' : 'warn',
+      params: { site: conv.siteName, reason: ex.savedCopy.reason, mins: Math.max(0, Math.floor((Date.now() - ex.fetchedAt) / 60_000)), current: current ? 1 : 0 },
     });
   }
   if (ex.pages && ex.pages > 1) checks.push({ code: 'pages', status: 'info', params: { pages: ex.pages } });

@@ -122,9 +122,10 @@ export interface ExtractionInfo {
   /**
    * Set when this run could not fetch the conversation (the site limited or refused the request,
    * or the network failed) and used the copy an earlier run saved; `fetchedAt` stays that run's
-   * time (v1.3.10).
+   * time. `current`: the page showed no message the copy lacks, so it was used without waiting
+   * (v1.3.10).
    */
-  savedCopy?: { reason: string; retryAfterSec?: number };
+  savedCopy?: { reason: string; retryAfterSec?: number; current?: boolean };
 }
 
 export interface Conversation {

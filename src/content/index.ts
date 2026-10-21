@@ -4,6 +4,7 @@
 // runs only when the user starts a job.
 
 import { COLLECT_PORT, type AssetRequest, type FromContent, type ToContent } from '../shared/messages';
+import { FETCH_FAILURES, copyIsCurrent } from '../shared/saved-copy';
 import { detectSite, extractConversationId } from '../shared/sites';
 import type { Conversation, SiteId } from '../shared/types';
 import { bytesToBase64, mapLimit, sniffImageMime } from '../shared/util';
@@ -14,6 +15,7 @@ import { grokAdapter } from './adapters/grok';
 import { ExtractError, type AdapterContext, type SiteAdapter } from './adapters/types';
 import { Bridge } from './bridge';
 import { collectConversation } from './collect';
+import { latestTurnIds } from './dom-fallback';
 import { initPageUi } from './page-ui';
 
 declare global {
@@ -79,6 +81,9 @@ if (!window.__lucianContentLoaded) {
           return;
         }
         busy = true; // tech doc §21.1 in-flight flag
+        // The saved copy's newest ids (if any): when the page shows nothing newer, a 429 is not waited out.
+        const copy = msg.copy;
+        ctx.savedCopyIsCurrent = () => copyIsCurrent(latestTurnIds(site), copy);
         try {
           ctx.url = location.href;
           const conversationId = extractConversationId(site, location.href);
@@ -89,7 +94,8 @@ if (!window.__lucianContentLoaded) {
         } catch (e) {
           const code = e instanceof ExtractError ? e.code : 'UNKNOWN';
           const retryAfterSec = e instanceof ExtractError ? e.retryAfterSec : undefined;
-          post({ type: 'error', code, message: e instanceof Error ? e.message : String(e), retryAfterSec });
+          const copyCurrent = FETCH_FAILURES.has(code) ? ctx.savedCopyIsCurrent?.() : undefined;
+          post({ type: 'error', code, message: e instanceof Error ? e.message : String(e), retryAfterSec, copyCurrent });
         } finally {
           busy = false;
         }

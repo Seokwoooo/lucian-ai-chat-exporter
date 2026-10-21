@@ -83,7 +83,8 @@ function savedCopyText(locale: Locale, params: Record<string, string | number>):
         : mins < 48 * 60
           ? t(locale, 'age.hours', { n: Math.floor(mins / 60) })
           : t(locale, 'age.days', { n: Math.floor(mins / (24 * 60)) });
-  return t(locale, 'check.source.saved', { why: t(locale, `saved.why.${reason}` as MessageKey, { site }), when });
+  const key: MessageKey = Number(params.current) ? 'check.source.savedCurrent' : 'check.source.saved';
+  return t(locale, key, { why: t(locale, `saved.why.${reason}` as MessageKey, { site }), when });
 }
 
 export function checkText(locale: Locale, c: VerificationCheck): string {

@@ -3,7 +3,7 @@
 // script, fetches assets (with a background fallback for CORS-blocked images), asks the
 // offscreen document to build the file and downloads it with chrome.downloads.
 
-import { cleanupCaches, conversationKey, getAsset, getConversationRecord, putAsset, putConversation } from '../shared/db';
+import { cleanupCaches, conversationKey, getAsset, getConversationRecord, putAsset, putConversation, type ConversationRecord } from '../shared/db';
 import type { Locale } from '../shared/i18n';
 import {
   COLLECT_PORT,
@@ -15,8 +15,9 @@ import {
   type FromContent,
   type PopupRequest,
   type PrintReport,
+  type ToContent,
 } from '../shared/messages';
-import { savedCopyFor } from '../shared/saved-copy';
+import { copyTail, savedCopyFor, type CopyTail } from '../shared/saved-copy';
 import { detectSite, extractConversationId } from '../shared/sites';
 import type { Conversation, ExportFormat, JobKind, JobState, MdImageMode, VerificationCheck } from '../shared/types';
 import { base64ToBytes, sameDownloadName, sniffImageMime, uid } from '../shared/util';
@@ -29,6 +30,8 @@ class JobError extends Error {
     message?: string,
     /** RATE_LIMIT: the wait the site asked for (Retry-After), shown with the error. */
     public retryAfterSec?: number,
+    /** Fetch failures: the page showed no message the saved copy lacks. */
+    public copyCurrent?: boolean,
   ) {
     super(message ?? code);
   }
@@ -186,16 +189,18 @@ async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Prom
   await ensureContentScript(tabId);
   const port = chrome.tabs.connect(tabId, { name: COLLECT_PORT });
   try {
+    const saved = await savedRecord(job, tab.url);
     let conv: Conversation;
     let savedAt: number | undefined;
     try {
-      conv = await collectConversation(port, job);
+      conv = await collectConversation(port, job, saved ? copyTail(saved.conversation) : undefined);
     } catch (e) {
       // The site limited or refused the request, or the network failed: build from the copy an
       // earlier run saved rather than fail (or read the page, which loses messages). v1.3.10
-      const copy = e instanceof JobError ? await savedCopy(job, tab.url, e) : undefined;
-      if (!copy) throw e;
-      ({ conv, savedAt } = copy);
+      const copy = e instanceof JobError && saved ? savedCopyFor(e.code, saved, e.retryAfterSec, e.copyCurrent) : undefined;
+      if (!copy || !saved) throw e;
+      conv = copy;
+      savedAt = saved.savedAt;
     }
     job.timings.collectMs = performance.now() - t0;
     job.timings.networkMs = conv.extraction.savedCopy ? undefined : conv.extraction.networkMs;
@@ -308,13 +313,12 @@ async function runJob(job: JobState, tab: chrome.tabs.Tab, locale: Locale): Prom
   }
 }
 
-/** The copy of this tab's conversation saved by an earlier run, when `e` is a fetch failure. */
-async function savedCopy(job: JobState, url: string | undefined, e: JobError): Promise<{ conv: Conversation; savedAt: number } | undefined> {
+/** The copy of this tab's conversation an earlier run fetched from the API, if any. */
+async function savedRecord(job: JobState, url: string | undefined): Promise<ConversationRecord | undefined> {
   const id = job.site && url ? extractConversationId(job.site, url) : null;
   if (!job.site || !id) return undefined;
   const rec = await getConversationRecord(conversationKey(job.site, id)).catch(() => undefined);
-  const conv = savedCopyFor(e.code, rec, e.retryAfterSec);
-  return conv && rec ? { conv, savedAt: rec.savedAt } : undefined;
+  return rec?.conversation.extraction.method === 'api' && rec.conversation.messages.length ? rec : undefined;
 }
 
 // ---------- content script plumbing ----------
@@ -344,7 +348,7 @@ async function ensureContentScript(tabId: number): Promise<void> {
   throw new JobError('CONTENT_UNAVAILABLE');
 }
 
-function collectConversation(port: chrome.runtime.Port, job: JobState): Promise<Conversation> {
+function collectConversation(port: chrome.runtime.Port, job: JobState, copy: CopyTail | undefined): Promise<Conversation> {
   return new Promise((resolve, reject) => {
     let meta: Omit<Conversation, 'messages' | 'otherBranchMessages'> | null = null;
     const messages: Conversation['messages'] = [];
@@ -376,7 +380,7 @@ function collectConversation(port: chrome.runtime.Port, job: JobState): Promise<
         case 'error':
           settled = true;
           port.onMessage.removeListener(onMessage);
-          reject(new JobError(m.code, m.message, m.retryAfterSec));
+          reject(new JobError(m.code, m.message, m.retryAfterSec, m.copyCurrent));
           break;
       }
     };
@@ -384,7 +388,7 @@ function collectConversation(port: chrome.runtime.Port, job: JobState): Promise<
     port.onDisconnect.addListener(() => {
       if (!settled) reject(new JobError('INTERRUPTED', chrome.runtime.lastError?.message));
     });
-    port.postMessage({ type: 'collect' });
+    port.postMessage({ type: 'collect', copy } satisfies ToContent);
   });
 }
 

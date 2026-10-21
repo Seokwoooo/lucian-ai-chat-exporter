@@ -173,6 +173,62 @@ async function runAndWait(tabId: number, selector: string, timeoutMs = 60_000): 
   return { job, ms: Date.now() - t0 };
 }
 
+/**
+ * Puts the saved copy's newest server ids on the mock page's messages, where the real sites carry
+ * them (checked against their APIs, 2026-10-22): ChatGPT data-chatgpt-search-message-ids (older
+ * layout data-message-id), Claude data-turn-key, Gemini .conversation-container#<response id>,
+ * Grok #response-<id>.
+ */
+async function markWithCopyIds(page: Page, site: 'chatgpt' | 'claude' | 'gemini' | 'grok'): Promise<void> {
+  const ids = await popup.evaluate(async (prefix) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open('lucianDB');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const recs = await new Promise<Array<{ key: string; savedAt: number; conversation: { messages: Array<{ id?: string; ids?: string[] }> } }>>((resolve, reject) => {
+      const req = db.transaction('conversations').objectStore('conversations').getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    const rec = recs.filter((r) => r.key.startsWith(prefix)).sort((a, b) => b.savedAt - a.savedAt)[0];
+    return rec ? rec.conversation.messages.flatMap((m) => (m.ids?.length ? m.ids : m.id ? [m.id] : [])) : [];
+  }, `${site}:`);
+  expect(ids.length, site).toBeGreaterThan(0);
+  await page.evaluate(
+    (site, ids) => {
+      // The Claude and Gemini mock pages end with a question; a real page showing the copy ends
+      // with its last answer (a question-last page is never taken as current).
+      const ending = (sel: string, isQuestion: (el: Element) => boolean, answer: string) => {
+        const last = [...document.querySelectorAll(sel)].pop();
+        if (last && isQuestion(last)) last.insertAdjacentHTML('afterend', answer);
+      };
+      if (site === 'claude') ending('[data-testid="user-message"], [data-testid="assistant-message"]', (el) => el.matches('[data-testid="user-message"]'), '<div data-testid="assistant-message"><div class="font-claude-response">a2</div></div>');
+      if (site === 'gemini') ending('user-query, model-response', (el) => el.tagName.toLowerCase() === 'user-query', '<model-response>a2</model-response>');
+      const fromEnd = (els: Element[], set: (el: Element, id: string) => void) =>
+        els.reverse().forEach((el, i) => {
+          const id = ids[ids.length - 1 - i];
+          if (id) set(el, id);
+        });
+      if (site === 'chatgpt') fromEnd([...document.querySelectorAll('[data-message-author-role]')], (el, id) => el.setAttribute('data-message-id', id));
+      if (site === 'claude') fromEnd([...document.querySelectorAll('[data-testid="user-message"], [data-testid="assistant-message"]')], (el, id) => el.setAttribute('data-turn-key', id));
+      if (site === 'grok') fromEnd([...document.querySelectorAll('[id^="response-"]')], (el, id) => (el.id = `response-${id}`));
+      if (site === 'gemini') {
+        const q = [...ids].reverse().find((id) => id.endsWith(':q')) ?? ids[ids.length - 1];
+        const box = document.createElement('div');
+        box.className = 'conversation-container';
+        box.id = q.replace(/:q$/, '').replace(/^r_/, '');
+        const els = [...document.querySelectorAll('user-query, model-response')];
+        els[0].before(box);
+        for (const el of els) box.append(el);
+      }
+    },
+    site,
+    ids,
+  );
+}
+
 /** Every image a Markdown file links (relative paths), resolved against `dir`. */
 function linkedImages(md: string, dir: string): Array<{ link: string; exists: boolean }> {
   return [...md.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => ({ link: m[1], exists: !/^https?:/.test(m[1]) && existsSync(join(dir, decodeURIComponent(m[1]))) }));
@@ -431,7 +487,22 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
         const items = await popup.$$eval('#checks li', (lis) => lis.map((li) => li.textContent ?? ''));
         expect(items[0], site).toMatch(/요청을 잠시 막아 (방금|\d+분 전에) 받아 둔 사본|limiting requests, so this was built from the copy saved/);
 
+        // 2b) The page shows nothing the copy lacks (its messages carry the copy's server ids, as the
+        //     real sites' do): no waiting even for a long Retry-After, the copy at once, only a note.
+        await markWithCopyIds(page, site);
+        rateLimit.set(site, { times: Infinity, retryAfter: 30 });
+        const progressBefore = seenProgress.length;
+        const quick = await runAndWait(tabId, '#handoffBtn');
+        expect(quick.job.phase, `${site}: ${JSON.stringify(quick.job.error)}`).toBe('done');
+        expect(quick.ms, site).toBeLessThan(5000);
+        expect(seenProgress.slice(progressBefore).some((p) => p.label === 'wait'), site).toBe(false);
+        const c2b = quick.job.result?.verification.checks ?? [];
+        expect(c2b.find((c) => c.code === 'source.saved')?.status, `${site}: ${JSON.stringify(c2b)}`).toBe('info');
+        expect(quick.job.result?.verification.level, site).toBe('ok');
+        expect(quick.job.result?.handoffStats?.messages, site).toBe(messages);
+
         // 3) No saved copy either: an error that names the wait; the page is still not read.
+        rateLimit.set(site, { times: Infinity, retryAfter: 1 });
         await popup.evaluate(async (prefix) => {
           const db = await new Promise<IDBDatabase>((resolve, reject) => {
             const req = indexedDB.open('lucianDB');
@@ -455,7 +526,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
         await popup.waitForFunction(() => document.getElementById('status')?.dataset.level === 'error', { timeout: 10_000 });
         expect(await statusSub(), site).toMatch(/1초 뒤에 다시 시도해 주세요|try again in 1 s/);
         expect(await statusText(), site).toMatch(/작업을 완료하지 못했습니다|could not/i);
-        report.push({ site, kind: 'rate-limited', freshMs: fresh.ms, waitedMs, savedCopyMs: copy.ms, noCopyMs: none.ms });
+        report.push({ site, kind: 'rate-limited', freshMs: fresh.ms, waitedMs, savedCopyMs: copy.ms, currentCopyMs: quick.ms, noCopyMs: none.ms });
       } finally {
         rateLimit.delete(site);
       }
