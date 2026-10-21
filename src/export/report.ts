@@ -1,11 +1,36 @@
 // Human readable verification report (shown in the popup and stored in the ZIP backup).
 
 import { t, formatBytes, formatMs, type Locale, type MessageKey } from '../shared/i18n';
-import { sourceDomain } from '../shared/sites';
+import { SITES, sourceDomain } from '../shared/sites';
 import type { CheckStatus, Conversation, JobState, JobTimings, Verification, VerificationCheck } from '../shared/types';
 import { formatDateTime } from '../shared/util';
 
 const ICON: Record<VerificationCheck['status'], string> = { pass: '✓', warn: '!', fail: '✗', info: 'i' };
+
+const siteName = (site: JobState['site']) => (site ? SITES[site]?.name : undefined) ?? 'AI';
+
+/**
+ * While a 429 is waited out (progress label 'wait'): the title and countdown the popup and the
+ * page panel show instead of "collecting…". Null otherwise.
+ */
+export function waitStatus(locale: Locale, job: Pick<JobState, 'site' | 'progress'>): { title: string; sub: string } | null {
+  const p = job.progress;
+  if (p?.label !== 'wait' || !p.total) return null;
+  const left = Math.max(0, p.total - (p.done ?? 0));
+  return {
+    title: t(locale, 'phase.wait', { site: siteName(job.site) }),
+    sub: left > 0 ? t(locale, 'progress.wait', { n: left }) : t(locale, 'progress.retrying'),
+  };
+}
+
+/** The message for a failed job; a 429 names the wait the site asked for. */
+export function jobErrorText(locale: Locale, job: Pick<JobState, 'site' | 'error'>): string {
+  const code = job.error?.code ?? 'UNKNOWN';
+  if (code === 'RATE_LIMIT' && job.error?.retryAfterSec) return t(locale, 'error.RATE_LIMIT.after', { site: siteName(job.site), n: job.error.retryAfterSec });
+  const key = `error.${code}` as MessageKey;
+  const s = t(locale, key);
+  return s === key ? t(locale, 'error.UNKNOWN') : s;
+}
 
 /**
  * The level a finished job is shown with. A saved handoff is always shown as saved (v1.3.8): the
@@ -45,11 +70,28 @@ function kindsText(locale: Locale, kinds: string): string {
     .join(', ');
 }
 
+/** "ChatGPT 서버가 요청을 잠시 막아 3분 전에 받아 둔 사본으로 만들었습니다 …" */
+function savedCopyText(locale: Locale, params: Record<string, string | number>): string {
+  const site = String(params.site ?? '');
+  const mins = Number(params.mins ?? 0);
+  const reason = ['RATE_LIMIT', 'AUTH', 'NETWORK'].includes(String(params.reason)) ? String(params.reason) : 'NETWORK';
+  const when =
+    mins < 1
+      ? t(locale, 'age.now')
+      : mins < 60
+        ? t(locale, 'age.minutes', { n: mins })
+        : mins < 48 * 60
+          ? t(locale, 'age.hours', { n: Math.floor(mins / 60) })
+          : t(locale, 'age.days', { n: Math.floor(mins / (24 * 60)) });
+  return t(locale, 'check.source.saved', { why: t(locale, `saved.why.${reason}` as MessageKey, { site }), when });
+}
+
 export function checkText(locale: Locale, c: VerificationCheck): string {
   const params = { ...(c.params ?? {}) };
   if (c.code === 'messages.missing' && typeof params.kinds === 'string' && params.kinds) {
     return t(locale, 'check.messages.missingKinds', { missing: params.missing, kinds: kindsText(locale, params.kinds) });
   }
+  if (c.code === 'source.saved') return savedCopyText(locale, params);
   // Only size parameters are byte counts; "saved" is a plain count in attachments.saved.
   const byteKeys = c.code === 'download.mismatch' ? ['saved', 'expected'] : ['size'];
   for (const [k, v] of Object.entries(params)) if (byteKeys.includes(k) && typeof v === 'number') params[k] = formatBytes(v);

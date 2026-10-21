@@ -1,4 +1,5 @@
-// DOM fallback used only when a service API path fails. Selectors live in one table per site so
+// DOM fallback used only when a service API answers in a shape the adapter no longer reads (not
+// when the site limits or refuses the request: src/content/collect.ts). Selectors live in one table per site so
 // a site redesign only requires editing this map. Lazy-rendered history is loaded by scrolling
 // the chat container to the top until the message count stops growing; virtualized lists (which
 // unmount turns that leave the viewport) are then read while scrolling back down.
@@ -73,6 +74,18 @@ function outermost(list: Element[]): Element[] {
   });
 }
 
+/**
+ * Puts the user back where they were. Loading history adds content above (the transcript doubled
+ * from 22k to 44k px on chatgpt.com, 2026-10-22), so the same scrollTop showed an earlier part of
+ * the chat: keep the distance from the bottom instead.
+ */
+function keepPosition(scroller: HTMLElement): () => void {
+  const fromBottom = scroller.scrollHeight - scroller.scrollTop;
+  return () => {
+    scroller.scrollTop = Math.max(0, scroller.scrollHeight - fromBottom);
+  };
+}
+
 function scrollableAncestor(el: Element | null): HTMLElement | null {
   let p = el?.parentElement ?? null;
   while (p && p !== document.body) {
@@ -87,7 +100,7 @@ function scrollableAncestor(el: Element | null): HTMLElement | null {
 async function loadLazyHistory(spec: DomSpec, ctx: AdapterContext): Promise<void> {
   const scroller = scrollableAncestor(renderedElements(spec.items)[0] ?? null);
   if (!scroller) return;
-  const original = scroller.scrollTop;
+  const restore = keepPosition(scroller);
   let last = renderedElements(spec.items).length;
   let stable = 0;
   const deadline = Date.now() + 45_000;
@@ -103,7 +116,7 @@ async function loadLazyHistory(spec: DomSpec, ctx: AdapterContext): Promise<void
       stable++;
     }
   }
-  scroller.scrollTop = original;
+  restore();
 }
 
 interface DomItem {
@@ -151,7 +164,7 @@ class DomCollector {
 async function scanDownwards(collector: DomCollector, spec: DomSpec): Promise<void> {
   const scroller = scrollableAncestor(renderedElements(spec.items)[0] ?? null);
   if (!scroller) return;
-  const original = scroller.scrollTop;
+  const restore = keepPosition(scroller);
   const deadline = Date.now() + 60_000;
   scroller.scrollTop = 0;
   await sleep(300);
@@ -162,7 +175,7 @@ async function scanDownwards(collector: DomCollector, spec: DomSpec): Promise<vo
     await sleep(250);
   }
   collector.scan();
-  scroller.scrollTop = original;
+  restore();
 }
 
 export async function domFallbackExtract(site: SiteId, ctx: AdapterContext, conversationId: string): Promise<Conversation> {

@@ -5,7 +5,7 @@ import { SITES } from '../../shared/sites';
 import type { BranchMessages, Conversation, ExportContent, ExportMessage, SkippedNode, SourceRef } from '../../shared/types';
 import { cleanUrl, hostLabel, toEpochMs, urlKey } from '../../shared/util';
 import { domFallbackExtract } from '../dom-fallback';
-import { ExtractError, cleanTitle, fetchJson, renderedElements, titleFromFirstUserMessage, type AdapterContext, type SiteAdapter } from './types';
+import { ExtractError, RATE_LIMIT_WAIT_MS, cleanTitle, fetchJson, renderedElements, titleFromFirstUserMessage, type AdapterContext, type SiteAdapter } from './types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Json = any;
@@ -228,7 +228,7 @@ export const grokAdapter: SiteAdapter = {
     }
     if (!title) title = cleanTitle(document.title, 'Grok');
 
-    const nodeData = await fetchJson<Json>(ctx, `${base}/${id}/response-node?includeThreads=true`, { timeoutMs: 60_000 });
+    const nodeData = await fetchJson<Json>(ctx, `${base}/${id}/response-node?includeThreads=true`, { timeoutMs: 60_000, rateLimitWaitMs: RATE_LIMIT_WAIT_MS });
     const nodes: Json[] = Array.isArray(nodeData?.responseNodes) ? nodeData.responseNodes : [];
     if (!nodes.length) throw new ExtractError('EMPTY', 'no response nodes');
     const ids = [...new Set(nodes.map((n) => n.responseId).filter(Boolean))] as string[];
@@ -240,6 +240,7 @@ export const grokAdapter: SiteAdapter = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ responseIds: chunk }),
         timeoutMs: 120_000,
+        rateLimitWaitMs: RATE_LIMIT_WAIT_MS,
       });
       if (Array.isArray(data?.responses)) responses.push(...data.responses);
       ctx.progress('messages', responses.length, ids.length);

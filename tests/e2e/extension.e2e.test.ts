@@ -11,7 +11,7 @@ import puppeteer, { type Browser, type CDPSession, type Page, type Target } from
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { JobState } from '../../src/shared/types';
 import { estimateTokens, handoffFilename } from '../../src/shared/util';
-import { PAGES, calls, failApi, hiddenEarlierConversation, route } from './mock-sites';
+import { PAGES, calls, failApi, hiddenEarlierConversation, rateLimit, route } from './mock-sites';
 
 const DIST = resolve('dist');
 // Files are named "<site>-export.<ext>": "claude.md" would collide with CLAUDE.md on
@@ -341,7 +341,7 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
 
   // Real-site state found in 2026-10 (v1.3.2): after in-app navigation the earlier conversation
   // stays in the page, hidden. It must not be counted ("the page shows more user messages") nor
-  // read when the API fails and the extension reads the page instead.
+  // read when the API answers in an unknown shape and the extension reads the page instead.
   it('in-app navigation: a hidden earlier conversation is neither counted nor read (all sites)', async () => {
     for (const site of ['chatgpt', 'claude', 'gemini', 'grok'] as const) {
       const page = await browser.newPage();
@@ -381,6 +381,83 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
         report.push({ site, kind: 'hidden-earlier-conversation', apiMs: viaApi.ms, domFallbackMs: viaPage.ms, messages: viaPage.job.result?.handoffStats?.messages });
       } finally {
         failApi.delete(site);
+      }
+      await page.close();
+    }
+  }, 300_000);
+
+  // Real-site state found on 2026-10-22 (v1.3.10): chatgpt.com answered a long chat's repeated full
+  // requests with 429 "Retry-After: 35". The extension gave up after 4.5 s and read the page, which
+  // scrolled the chat for ~40 s and kept 16 of 42 messages. Now it waits, then uses the saved copy.
+  it('rate limited (HTTP 429): waits out Retry-After, then uses the saved copy, never reads the page (all sites)', async () => {
+    const statusText = () => popup.$eval('#statusText', (el) => el.textContent ?? '');
+    const statusSub = () => popup.$eval('#statusSub', (el) => el.textContent ?? '');
+    for (const site of ['chatgpt', 'claude', 'gemini', 'grok'] as const) {
+      const page = await browser.newPage();
+      await page.goto(PAGES[site], { waitUntil: 'load' });
+      const tabId = await tabIdFor(PAGES[site]);
+      await popup.bringToFront();
+      await popup.goto(`chrome-extension://${extId}/popup.html?tabId=${tabId}`, { waitUntil: 'load' });
+      await popup.waitForSelector('#handoffBtn:not([disabled])');
+      try {
+        const fresh = await runAndWait(tabId, '#handoffBtn');
+        expect(fresh.job.phase, `${site}: ${JSON.stringify(fresh.job.error)}`).toBe('done');
+        const messages = fresh.job.result?.handoffStats?.messages;
+
+        // 1) One 429: the popup counts down the site's Retry-After, then the API answers.
+        rateLimit.set(site, { times: 1, retryAfter: 2 });
+        const t1 = Date.now();
+        await popup.click('#handoffBtn');
+        await popup.waitForFunction(() => /서버가 요청을 잠시 막았습니다|is limiting requests/.test(document.getElementById('statusText')?.textContent ?? ''), { timeout: 10_000 });
+        expect(await statusSub(), site).toMatch(/초 후 다시 받아 옵니다|Retrying in \d+ s|다시 받아 오는 중|Retrying…/);
+        const waited = await waitJob(tabId, (j) => j.startedAt >= t1 - 50 && ['done', 'error'].includes(j.phase));
+        const waitedMs = Date.now() - t1;
+        expect(waited.phase, `${site}: ${JSON.stringify(waited.error)}`).toBe('done');
+        expect(waitedMs, site).toBeGreaterThanOrEqual(2000);
+        const c1 = waited.result?.verification.checks ?? [];
+        expect(c1.some((c) => c.code === 'method.dom' || c.code === 'source.saved'), `${site}: ${JSON.stringify(c1)}`).toBe(false);
+        expect(waited.result?.handoffStats?.messages, site).toBe(messages);
+
+        // 2) Still limited after every retry: the copy saved by the runs above, with a warning.
+        rateLimit.set(site, { times: Infinity, retryAfter: 1 });
+        const copy = await runAndWait(tabId, '#handoffBtn');
+        expect(copy.job.phase, `${site}: ${JSON.stringify(copy.job.error)}`).toBe('done');
+        const c2 = copy.job.result?.verification.checks ?? [];
+        expect(c2.find((c) => c.code === 'source.saved')?.status, `${site}: ${JSON.stringify(c2)}`).toBe('warn');
+        expect(c2.some((c) => c.code === 'method.dom'), site).toBe(false);
+        expect(copy.job.result?.handoffStats?.messages, site).toBe(messages);
+        await popup.waitForFunction(() => /인수인계 파일 저장 완료|Handoff file saved/.test(document.getElementById('statusText')?.textContent ?? ''), { timeout: 10_000 });
+        await popup.click('#detailsBtn');
+        const items = await popup.$$eval('#checks li', (lis) => lis.map((li) => li.textContent ?? ''));
+        expect(items[0], site).toMatch(/요청을 잠시 막아 (방금|\d+분 전에) 받아 둔 사본|limiting requests, so this was built from the copy saved/);
+
+        // 3) No saved copy either: an error that names the wait; the page is still not read.
+        await popup.evaluate(async (prefix) => {
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const req = indexedDB.open('lucianDB');
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          await new Promise<void>((resolve, reject) => {
+            const t = db.transaction('conversations', 'readwrite');
+            const s = t.objectStore('conversations');
+            const keys = s.getAllKeys();
+            keys.onsuccess = () => keys.result.filter((k) => String(k).startsWith(prefix)).forEach((k) => s.delete(k));
+            t.oncomplete = () => resolve();
+            t.onerror = () => reject(t.error);
+          });
+          db.close();
+        }, `${site}:`);
+        const none = await runAndWait(tabId, '#handoffBtn');
+        expect(none.job.phase, site).toBe('error');
+        expect(none.job.error?.code, site).toBe('RATE_LIMIT');
+        expect(none.job.error?.retryAfterSec, site).toBe(1);
+        await popup.waitForFunction(() => document.getElementById('status')?.dataset.level === 'error', { timeout: 10_000 });
+        expect(await statusSub(), site).toMatch(/1초 뒤에 다시 시도해 주세요|try again in 1 s/);
+        expect(await statusText(), site).toMatch(/작업을 완료하지 못했습니다|could not/i);
+        report.push({ site, kind: 'rate-limited', freshMs: fresh.ms, waitedMs, savedCopyMs: copy.ms, noCopyMs: none.ms });
+      } finally {
+        rateLimit.delete(site);
       }
       await page.close();
     }

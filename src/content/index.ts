@@ -13,6 +13,7 @@ import { geminiAdapter } from './adapters/gemini';
 import { grokAdapter } from './adapters/grok';
 import { ExtractError, type AdapterContext, type SiteAdapter } from './adapters/types';
 import { Bridge } from './bridge';
+import { collectConversation } from './collect';
 import { initPageUi } from './page-ui';
 
 declare global {
@@ -83,11 +84,12 @@ if (!window.__lucianContentLoaded) {
           const conversationId = extractConversationId(site, location.href);
           if (!conversationId) throw new ExtractError('NOT_CONVERSATION');
           lastConversationId = conversationId;
-          const conv = await collect(adapter, ctx, conversationId);
+          const conv = await collectConversation(adapter, ctx, conversationId);
           streamConversation(conv, post);
         } catch (e) {
           const code = e instanceof ExtractError ? e.code : 'UNKNOWN';
-          post({ type: 'error', code, message: e instanceof Error ? e.message : String(e) });
+          const retryAfterSec = e instanceof ExtractError ? e.retryAfterSec : undefined;
+          post({ type: 'error', code, message: e instanceof Error ? e.message : String(e), retryAfterSec });
         } finally {
           busy = false;
         }
@@ -97,27 +99,6 @@ if (!window.__lucianContentLoaded) {
       }
     });
   });
-}
-
-async function collect(adapter: SiteAdapter, ctx: AdapterContext, conversationId: string): Promise<Conversation> {
-  let conv: Conversation;
-  try {
-    conv = await adapter.getAllChatsForTopic(ctx, conversationId);
-    if (!conv.messages.length) throw new ExtractError('EMPTY');
-  } catch (apiError) {
-    // Internal APIs change; fall back to the rendered page so the user still gets a result,
-    // and record the reason so the verification report can say how the data was obtained.
-    try {
-      conv = await adapter.domFallback(ctx, conversationId);
-      conv.extraction.warnings.push(`api-failed:${apiError instanceof ExtractError ? apiError.code : 'UNKNOWN'}`);
-    } catch {
-      throw apiError;
-    }
-  }
-  conv.extraction.domUserTurns = adapter.countDomUserTurns();
-  conv.extraction.networkMs = Math.round(ctx.timer.networkMs);
-  conv.extraction.parseMs = Math.round(ctx.timer.parseMs);
-  return conv;
 }
 
 function streamConversation(conv: Conversation, post: (m: FromContent) => void): void {

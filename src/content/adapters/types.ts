@@ -15,6 +15,8 @@ export class ExtractError extends Error {
   constructor(
     public code: ErrorCode,
     message?: string,
+    /** RATE_LIMIT: how long the site asked to wait (Retry-After), when it said so. */
+    public retryAfterSec?: number,
   ) {
     super(message ?? code);
   }
@@ -23,7 +25,8 @@ export class ExtractError extends Error {
 export interface AdapterContext {
   url: string;
   bridge: Bridge;
-  progress: (label: 'messages' | 'pages', done: number, total?: number) => void;
+  /** 'wait': waiting out a 429 — `done` of `total` seconds have passed. */
+  progress: (label: 'messages' | 'pages' | 'wait', done: number, total?: number) => void;
   /** Accumulates time spent waiting on the network vs. parsing. */
   timer: { networkMs: number; parseMs: number };
 }
@@ -59,7 +62,47 @@ export interface SiteAdapter {
 
 export interface FetchJsonOptions extends RequestInit {
   timeoutMs?: number;
+  /** Extra attempts after a network error, a 5xx, or (when not waiting it out) a 429. */
   retries?: number;
+  /**
+   * Longest total time to wait out HTTP 429 answers, honouring Retry-After. Set for the requests
+   * that carry the conversation itself; optional requests (titles, file links) keep the default 0:
+   * a short backoff within `retries`, then failure.
+   */
+  rateLimitWaitMs?: number;
+}
+
+/**
+ * chatgpt.com answered a long chat's third or fourth full request within a few minutes with 429
+ * and "Retry-After: 35" (2026-10-22); giving up after 4.5 s and reading the page instead kept 16
+ * of its 42 messages. The conversation requests wait up to this long instead.
+ */
+export const RATE_LIMIT_WAIT_MS = 90_000;
+/** Answers to try before giving up on a rate-limited request (the first one included). */
+export const RATE_LIMIT_TRIES = 3;
+/** Wait when a 429 names no Retry-After: 3 s, then 6 s. */
+const RATE_LIMIT_BACKOFF_MS = 3_000;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Retry-After as milliseconds: delay-seconds or an HTTP date (RFC 9110 §10.2.3). */
+export function retryAfterMs(value: string | null | undefined, now = Date.now()): number | undefined {
+  const s = value?.trim();
+  if (!s) return undefined;
+  if (/^\d+(\.\d+)?$/.test(s)) return Math.round(Number(s) * 1000);
+  const at = Date.parse(s);
+  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+}
+
+/** Waits `ms`, reporting each second passed so the popup and the page panel can count down. */
+async function waitOut(ctx: AdapterContext | null, ms: number): Promise<void> {
+  const total = Math.max(1, Math.ceil(ms / 1000));
+  const end = Date.now() + ms;
+  for (let left = ms; left > 0; left = end - Date.now()) {
+    ctx?.progress('wait', total - Math.ceil(left / 1000), total);
+    await sleep(Math.min(1000, left));
+  }
+  ctx?.progress('wait', total, total);
 }
 
 /** fetch wrapper that maps HTTP failures to ExtractError codes and retries transient errors. */
@@ -68,39 +111,54 @@ export async function fetchWithRetry(
   url: string,
   init: FetchJsonOptions = {},
 ): Promise<Response> {
-  const { timeoutMs = 60_000, retries = 1, ...rest } = init;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  const { timeoutMs = 60_000, retries = 1, rateLimitWaitMs = 0, ...rest } = init;
+  let failures = 0;
+  let limited = 0;
+  let waited = 0;
+  for (;;) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const t0 = performance.now();
+    let res: Response;
     try {
-      const res = await fetch(url, { credentials: 'include', ...rest, signal: controller.signal });
-      if (ctx) ctx.timer.networkMs += performance.now() - t0;
-      if (res.ok) return res;
-      if (res.status === 401 || res.status === 403) throw new ExtractError('AUTH', `HTTP ${res.status}`);
-      if (res.status === 404) throw new ExtractError('NOT_FOUND', `HTTP ${res.status}`);
-      if (res.status === 429) {
-        lastErr = new ExtractError('RATE_LIMIT', `HTTP ${res.status}`);
-        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
-        continue;
-      }
-      if (res.status >= 500) {
-        lastErr = new ExtractError('NETWORK', `HTTP ${res.status}`);
-        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
-        continue;
-      }
-      throw new ExtractError('NETWORK', `HTTP ${res.status}`);
+      res = await fetch(url, { credentials: 'include', ...rest, signal: controller.signal });
     } catch (e) {
-      if (ctx) ctx.timer.networkMs += performance.now() - t0;
-      if (e instanceof ExtractError && e.code !== 'NETWORK' && e.code !== 'RATE_LIMIT') throw e;
-      lastErr = e instanceof ExtractError ? e : new ExtractError('NETWORK', e instanceof Error ? e.message : String(e));
-      if (attempt < retries) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+      // Offline, DNS, connection reset, or our own timeout.
+      if (failures++ < retries) {
+        await sleep(800 * failures);
+        continue;
+      }
+      throw new ExtractError('NETWORK', e instanceof Error ? e.message : String(e));
     } finally {
       clearTimeout(timer);
+      if (ctx) ctx.timer.networkMs += performance.now() - t0;
     }
+    if (res.ok) return res;
+    if (res.status === 401 || res.status === 403) throw new ExtractError('AUTH', `HTTP ${res.status}`);
+    if (res.status === 404) throw new ExtractError('NOT_FOUND', `HTTP ${res.status}`);
+    if (res.status === 429) {
+      limited++;
+      const asked = retryAfterMs(res.headers.get('retry-after'));
+      const error = new ExtractError('RATE_LIMIT', 'HTTP 429', asked != null ? Math.ceil(asked / 1000) : undefined);
+      if (rateLimitWaitMs > 0) {
+        const wait = asked ?? RATE_LIMIT_BACKOFF_MS * limited;
+        if (limited >= RATE_LIMIT_TRIES || waited + wait > rateLimitWaitMs) throw error;
+        waited += wait;
+        await waitOut(ctx, wait);
+        continue;
+      }
+      if (failures++ < retries) {
+        await sleep(1500 * failures);
+        continue;
+      }
+      throw error;
+    }
+    if (res.status >= 500 && failures++ < retries) {
+      await sleep(800 * failures);
+      continue;
+    }
+    throw new ExtractError('NETWORK', `HTTP ${res.status}`);
   }
-  throw lastErr instanceof Error ? lastErr : new ExtractError('NETWORK');
 }
 
 export async function fetchJson<T = unknown>(ctx: AdapterContext | null, url: string, init: FetchJsonOptions = {}): Promise<T> {

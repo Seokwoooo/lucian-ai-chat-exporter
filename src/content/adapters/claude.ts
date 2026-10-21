@@ -6,7 +6,7 @@ import { SITES } from '../../shared/sites';
 import type { Conversation, ExportContent, ExportMessage, SkippedNode, SourceRef, BranchMessages } from '../../shared/types';
 import { toEpochMs } from '../../shared/util';
 import { domFallbackExtract } from '../dom-fallback';
-import { ExtractError, fetchJson, readCookie, renderedElements, type AdapterContext, type SiteAdapter } from './types';
+import { ExtractError, RATE_LIMIT_WAIT_MS, fetchJson, readCookie, renderedElements, type AdapterContext, type SiteAdapter } from './types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Json = any;
@@ -306,7 +306,11 @@ export const claudeAdapter: SiteAdapter = {
         `https://claude.ai/api/organizations/${encodeURIComponent(org)}/chat_conversations/${encodeURIComponent(conversationId)}` +
         '?tree=True&rendering_mode=messages&render_all_tools=true';
       try {
-        const data = await fetchJson<Json>(ctx, url, { headers: { Accept: '*/*', 'Content-Type': 'application/json' }, timeoutMs: 120_000 });
+        const data = await fetchJson<Json>(ctx, url, {
+          headers: { Accept: '*/*', 'Content-Type': 'application/json' },
+          timeoutMs: 120_000,
+          rateLimitWaitMs: RATE_LIMIT_WAIT_MS,
+        });
         const t0 = performance.now();
         const conv = parseClaudeConversation(data, { conversationId, url: ctx.url });
         ctx.timer.parseMs += performance.now() - t0;

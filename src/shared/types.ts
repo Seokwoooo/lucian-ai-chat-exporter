@@ -119,6 +119,12 @@ export interface ExtractionInfo {
   /** Messages that were truncated by the service itself. */
   truncatedBySource?: number;
   fetchedAt: number;
+  /**
+   * Set when this run could not fetch the conversation (the site limited or refused the request,
+   * or the network failed) and used the copy an earlier run saved; `fetchedAt` stays that run's
+   * time (v1.3.10).
+   */
+  savedCopy?: { reason: string; retryAfterSec?: number };
 }
 
 export interface Conversation {
@@ -242,7 +248,7 @@ export interface JobState {
   progress?: { done?: number; total?: number; label?: string };
   timings: JobTimings;
   result?: JobResult;
-  error?: { code: string; message?: string };
+  error?: { code: string; message?: string; retryAfterSec?: number };
   startedAt: number;
   finishedAt?: number;
   /** Markdown image mode the job runs with (after the user chose). */

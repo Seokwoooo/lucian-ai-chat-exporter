@@ -6,7 +6,7 @@ import { detectLocale, formatBytes, formatMs, t, type Locale, type MessageKey } 
 import { jobStorageKey } from '../shared/messages';
 import { SITES, detectSite, extractConversationId } from '../shared/sites';
 import type { ExportFormat, JobKind, JobState, MdImageMode, VerificationCheck } from '../shared/types';
-import { checkText, issuesFirst, shownLevel, shownStatus } from '../export/report';
+import { checkText, issuesFirst, jobErrorText, shownLevel, shownStatus, waitStatus } from '../export/report';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
 import { FORMAT_LOGOS, IMAGE_ICON, MD_CHOICE_CSS, mdChoiceDarkCss, mdChoiceHtml } from '../shared/ui-icons';
 
@@ -202,11 +202,9 @@ function formatName(job: JobState): string {
   return job.format ? t(locale, `format.${job.format}` as MessageKey) : 'Markdown';
 }
 
-function errorText(code: string): string {
-  if (code === 'BUSY') return t(locale, 'busy');
-  const key = `error.${code}` as MessageKey;
-  const s = t(locale, key);
-  return s === key ? t(locale, 'error.UNKNOWN') : s;
+function errorText(job: JobState): string {
+  if (job.error?.code === 'BUSY') return t(locale, 'busy');
+  return jobErrorText(locale, job);
 }
 
 function progressText(job: JobState): string {
@@ -283,8 +281,9 @@ function render(job: JobState | null): void {
               ? 'phase.processing.handoff'
               : 'phase.processing.export'
             : 'phase.downloading';
-    text.textContent = t(locale, key, { format: formatName(job) });
-    sub.textContent = progressText(job);
+    const wait = waitStatus(locale, job);
+    text.textContent = wait?.title ?? t(locale, key, { format: formatName(job) });
+    sub.textContent = wait?.sub ?? progressText(job);
     progress.hidden = false;
     const p = job.progress;
     if (p?.total && p.done != null) {
@@ -298,7 +297,7 @@ function render(job: JobState | null): void {
     box.dataset.level = 'error';
     setIcon(icon, 'err');
     text.textContent = t(locale, 'phase.error');
-    sub.textContent = errorText(job.error?.code ?? 'UNKNOWN');
+    sub.textContent = errorText(job);
     retry.hidden = job.error?.code === 'NOT_SUPPORTED' || job.error?.code === 'NOT_CONVERSATION';
     retry.textContent = t(locale, 'result.retry');
   } else {

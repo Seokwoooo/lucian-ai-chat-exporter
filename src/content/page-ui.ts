@@ -4,7 +4,7 @@
 // roots so the site's styles and ours never mix, and the button is re-added if the site re-renders
 // its toolbar. The page's own controls are never moved or changed.
 
-import { checkText, issuesFirst, shownLevel, shownStatus } from '../export/report';
+import { checkText, issuesFirst, jobErrorText, shownLevel, shownStatus, waitStatus } from '../export/report';
 import { detectLocale, formatBytes, t, type Locale, type MessageKey } from '../shared/i18n';
 import type { ExportFormat, JobKind, JobState, MdImageMode } from '../shared/types';
 import { HANDOFF_VISUAL_CSS, handoffVisualHtml } from '../shared/handoff-visual';
@@ -257,7 +257,9 @@ export function initPageUi(adapter: SiteAdapter): void {
               : 'phase.collecting';
       title = tr(key, { format: fmtName });
       const p = job.progress;
-      if (p?.label === 'messages' && p.done) sub = tr('progress.messages', { done: p.done.toLocaleString() });
+      const wait = waitStatus(locale, job);
+      if (wait) ({ title, sub } = wait);
+      else if (p?.label === 'messages' && p.done) sub = tr('progress.messages', { done: p.done.toLocaleString() });
       else if (p?.label === 'assets' && p.total) sub = `${tr('progress.assets', { done: p.done ?? 0, total: p.total })} ${tr('progress.percent', { n: Math.floor(((p.done ?? 0) / p.total) * 100) })}`;
       else if (p?.label === 'percent' && p.total) sub = tr('progress.percent', { n: p.done ?? 0 });
       if (p?.total && p.done != null) {
@@ -280,8 +282,7 @@ export function initPageUi(adapter: SiteAdapter): void {
       icon = ICON.err;
       iconKind = 'err';
       title = tr('phase.error');
-      const k = `error.${job.error?.code ?? 'UNKNOWN'}` as MessageKey;
-      sub = tr(k) === k ? tr('error.UNKNOWN') : tr(k);
+      sub = jobErrorText(locale, job);
     } else {
       const v = job.result?.verification;
       const level = shownLevel(job);

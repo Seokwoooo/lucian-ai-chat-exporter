@@ -18,14 +18,15 @@ export type ToContent = { type: 'collect' } | { type: 'assets'; items: AssetRequ
 
 /** Messages the content script streams back over the collect port. */
 export type FromContent =
-  | { type: 'progress'; label: 'messages' | 'pages' | 'assets'; done: number; total?: number }
+  /** 'wait': the site answered 429; `done` of `total` seconds of its Retry-After have passed. */
+  | { type: 'progress'; label: 'messages' | 'pages' | 'assets' | 'wait'; done: number; total?: number }
   | { type: 'meta'; conversation: Omit<Conversation, 'messages' | 'otherBranchMessages'> }
   | { type: 'messages'; messages: ExportMessage[] }
   | { type: 'branches'; branches: BranchMessages[] }
   | { type: 'done' }
   | { type: 'asset'; key: string; ok: boolean; mime?: string; base64?: string; size?: number; error?: string }
   | { type: 'assets-done' }
-  | { type: 'error'; code: string; message?: string };
+  | { type: 'error'; code: string; message?: string; retryAfterSec?: number };
 
 export type PopupRequest =
   /** tabId is omitted when the request comes from the in-page button (the sender's tab is used). */

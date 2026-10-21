@@ -66,13 +66,30 @@ const ACTIONS_CHATGPT =
 /** Records which endpoints the extension called, for assertions. */
 export const calls: string[] = [];
 
-/** Sites whose conversation API answers 500, so the extension falls back to reading the page. */
+/**
+ * Sites whose conversation API answers in a shape the adapter no longer reads (as after a site
+ * redesign), so the extension falls back to reading the page. Refused or limited requests do not
+ * lead there (v1.3.10): see `rateLimit`.
+ */
 export const failApi = new Set<string>();
 const API_PATHS: Record<string, RegExp> = {
   'chatgpt.com': /^\/backend-api\/conversation\//,
   'claude.ai': /^\/api\/organizations\/[^/]+\/chat_conversations\//,
   'gemini.google.com': /^\/_\/BardChatUi\/data\/batchexecute/,
   'grok.com': /^\/rest\/app-chat\//,
+};
+
+/**
+ * Sites whose conversation request answers HTTP 429 with "Retry-After: <retryAfter>" the next
+ * `times` times (Infinity: until removed), as chatgpt.com did for a long chat (2026-10-22).
+ */
+export const rateLimit = new Map<string, { times: number; retryAfter: number }>();
+/** The requests that carry the conversation (Grok's title request is optional and not limited). */
+const CONVERSATION_PATHS: Record<string, RegExp> = {
+  'chatgpt.com': /^\/backend-api\/conversation\/[^/]+$/,
+  'claude.ai': /^\/api\/organizations\/[^/]+\/chat_conversations\/[^/]+$/,
+  'gemini.google.com': /^\/_\/BardChatUi\/data\/batchexecute$/,
+  'grok.com': /^\/rest\/app-chat\/conversations\/[^/]+\/(response-node|load-responses)$/,
 };
 const SITE_OF_HOST: Record<string, string> = { 'chatgpt.com': 'chatgpt', 'claude.ai': 'claude', 'gemini.google.com': 'gemini', 'grok.com': 'grok' };
 
@@ -95,7 +112,12 @@ export function route(req: MockRequest): MockResponse | null {
   const u = new URL(req.url);
   const key = `${req.method} ${u.host}${u.pathname}`;
   calls.push(key);
-  if (failApi.has(SITE_OF_HOST[u.host]) && API_PATHS[u.host]?.test(u.pathname)) return json({ error: 'e2e: API down' }, 500);
+  const limited = rateLimit.get(SITE_OF_HOST[u.host]);
+  if (limited && limited.times > 0 && CONVERSATION_PATHS[u.host]?.test(u.pathname)) {
+    limited.times--;
+    return { status: 429, headers: { 'content-type': 'application/json', 'retry-after': String(limited.retryAfter) }, body: '{"detail":"Too many requests"}' };
+  }
+  if (failApi.has(SITE_OF_HOST[u.host]) && API_PATHS[u.host]?.test(u.pathname)) return json({ e2e: 'a shape the adapter does not know' });
 
   // ---------- ChatGPT ----------
   if (u.host === 'chatgpt.com') {

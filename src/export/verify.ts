@@ -82,6 +82,14 @@ export function buildVerification(
     checks.push({ code: 'dom.more', status: 'warn', params: { dom: ex.domUserTurns, exported: userMessages } });
   }
   if (ex.method === 'dom') checks.push({ code: 'method.dom', status: 'warn' });
+  // Built from the copy an earlier run saved: say why and how old it is (messages sent since are missing).
+  if (ex.savedCopy) {
+    checks.push({
+      code: 'source.saved',
+      status: 'warn',
+      params: { site: conv.siteName, reason: ex.savedCopy.reason, mins: Math.max(0, Math.floor((Date.now() - ex.fetchedAt) / 60_000)) },
+    });
+  }
   if (ex.pages && ex.pages > 1) checks.push({ code: 'pages', status: 'info', params: { pages: ex.pages } });
   if (ex.truncatedBySource) checks.push({ code: 'truncated.source', status: 'warn', params: { n: ex.truncatedBySource } });
   const hidden = ex.skipped.filter((s) => s.reason !== 'empty' && s.reason !== 'partial').length;

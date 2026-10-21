@@ -15,6 +15,7 @@ import { cleanUrl, hostLabel, mapLimit, toEpochMs, urlKey } from '../../shared/u
 import { domFallbackExtract } from '../dom-fallback';
 import {
   ExtractError,
+  RATE_LIMIT_WAIT_MS,
   fetchJson,
   readCookie,
   renderedElements,
@@ -727,6 +728,7 @@ export const chatgptAdapter: SiteAdapter = {
       method: 'GET',
       headers,
       timeoutMs: 120_000,
+      rateLimitWaitMs: RATE_LIMIT_WAIT_MS,
     });
     const t0 = performance.now();
     const conv = parseChatGPTConversation(data, { conversationId, url: ctx.url });

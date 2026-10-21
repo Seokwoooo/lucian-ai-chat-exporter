@@ -85,15 +85,22 @@ function tx<T>(store: string, mode: IDBTransactionMode, fn: (s: IDBObjectStore) 
 
 export const conversationKey = (site: string, pageId: string) => `${site}:${pageId}`;
 
-export function putConversation(conv: Conversation): Promise<string> {
+/**
+ * `savedAt` drives the 7-day retention: a saved copy used again keeps the time it was first
+ * stored, so reusing it never extends how long the conversation stays on disk.
+ */
+export function putConversation(conv: Conversation, savedAt = Date.now()): Promise<string> {
   const key = conversationKey(conv.site, conv.pageId);
-  const rec: ConversationRecord = { key, savedAt: Date.now(), site: conv.site, conversation: conv };
+  const rec: ConversationRecord = { key, savedAt, site: conv.site, conversation: conv };
   return tx('conversations', 'readwrite', (s) => s.put(rec)).then(() => key);
 }
 
+export function getConversationRecord(key: string): Promise<ConversationRecord | undefined> {
+  return tx<ConversationRecord | undefined>('conversations', 'readonly', (s) => s.get(key));
+}
+
 export async function getConversation(key: string): Promise<Conversation | undefined> {
-  const rec = await tx<ConversationRecord | undefined>('conversations', 'readonly', (s) => s.get(key));
-  return rec?.conversation;
+  return (await getConversationRecord(key))?.conversation;
 }
 
 export async function putAsset(key: string, blob: Blob, mime: string): Promise<void> {

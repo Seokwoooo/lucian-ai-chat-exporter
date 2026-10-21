@@ -9,6 +9,7 @@ import { domFallbackExtract } from '../dom-fallback';
 import {
   ExtractError,
   cleanTitle,
+  RATE_LIMIT_WAIT_MS,
   fetchWithRetry,
   renderedElements,
   titleFromFirstUserMessage,
@@ -260,6 +261,7 @@ export const geminiAdapter: SiteAdapter = {
         body: form.toString(),
         retries: 1,
         timeoutMs: 60_000,
+        rateLimitWaitMs: RATE_LIMIT_WAIT_MS,
       });
       const text = await res.text();
       const t0 = performance.now();

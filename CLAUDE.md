@@ -45,7 +45,8 @@ page MAIN world  src/inject/main-world.ts   observes fetch/XHR headers (ChatGPT 
 content script   src/content/index.ts       picks the site adapter, collects, streams chunks over a Port
   page button    src/content/page-ui.ts     Lucian button in each answer's toolbar (adapter.actionBars()) + panel
   adapters       src/content/adapters/*.ts  one file per site → common Conversation model (src/shared/types.ts)
-  DOM fallback   src/content/dom-fallback.ts used only when the API path fails (reported as a warning)
+  collect        src/content/collect.ts     API first; the page only when the API answers in an unknown shape
+  DOM fallback   src/content/dom-fallback.ts PARSE / EMPTY / parser errors only (reported as a warning)
 service worker   src/background/index.ts    job state (chrome.storage.session), assets, offscreen, downloads
 offscreen doc    src/offscreen/offscreen.ts builds files; handoff runs in src/handoff/worker.ts (Web Worker)
 print page       src/print/print.ts         PDF via window.print() — nothing leaves the machine
@@ -104,7 +105,16 @@ popup            src/popup/*                two cards: handoff button, export fo
   "commentary"`, virtualized transcripts), add a synthetic fixture that mirrors it before fixing.
 - Real sites keep earlier conversations mounted but hidden after in-app navigation (chatgpt.com,
   2026-10). DOM counts and the DOM fallback use `renderedElements()` only; the E2E injects a hidden
-  earlier conversation on all four sites and also forces the API to fail.
+  earlier conversation on all four sites and also forces the API to answer in an unknown shape.
+- A refused or limited request is not a reason to read the page (user report 2026-10-22: chatgpt.com
+  answered a long chat's repeated full requests with 429 "Retry-After: 35"; the page fallback scrolled
+  the chat for ~40 s and kept 16 of 42 messages, while AI Exporter used its saved copy). Conversation
+  requests pass `rateLimitWaitMs: RATE_LIMIT_WAIT_MS` and wait out Retry-After (≤ 3 answers, ≤ 90 s,
+  progress label `wait` = countdown); optional requests keep the short backoff. RATE_LIMIT / AUTH /
+  NETWORK (`FETCH_FAILURES`, src/shared/saved-copy.ts) never reach the DOM fallback: the service
+  worker uses the API copy saved by an earlier run (`source.saved` warning with its age; re-saving
+  keeps its `savedAt`, so retention is not extended) or reports the error with the wait the site
+  asked for. The E2E checks all three cases on all four sites (v1.3.10).
 - Before releasing a change to collection or the handoff engine, run it on real conversations the
   way users do (in-app navigation, the in-page panel), export JSON + handoff for each, and run
   `npm run check:real` on that folder. Mock E2E alone missed the hidden-conversation bug (v1.3.2).
