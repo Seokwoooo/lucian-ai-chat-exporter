@@ -116,13 +116,16 @@ popup            src/popup/*                two cards: handoff button, export fo
   keeps its `savedAt`, so retention is not extended) or reports the error with the wait the site
   asked for. The E2E checks all three cases on all four sites (v1.3.10).
 - The user never decides between waiting and the copy. On a 429 the copy is used at once, with no
-  wait and only an `info` note (`savedCopy.current`), when the page's newest turns are all in it:
-  `latestTurnIds(site)` (src/content/dom-fallback.ts, ids per site in `DomSpec.turnIds`) vs the
-  `copyTail` the service worker sends with collect (`copyIsCurrent`). `latestTurnIds` returns null
-  — wait as usual — unless the list is at its end, the newest message is an answer, each of the last
-  4 turns carries ids, nothing is being written (`busy`) and no id-less answer part follows
-  (`unidentified`). chatgpt.com draws image answers and long-run work logs without message ids
-  (2026-10-22), so a question-last page is never "current". Null must never lead to the copy.
+  wait and only an `info` note (`savedCopy.current`), when the page shows nothing newer:
+  `latestTurns(site)` (src/content/dom-fallback.ts: ids per site in `DomSpec.turnIds` + the last
+  answer's text as a `plainKey`) vs the `copyTail` the service worker sends with collect
+  (`copyIsCurrent`: every page id in the copy AND the copy's last answer ends the same, last 40
+  letters/digits). `latestTurns` returns null — wait as usual — unless the list is at its end, the
+  newest message is an answer with text, each of the last 4 turns carries ids, nothing is being
+  written (`busy`) and no id-less answer part follows (`unidentified`). Real pages, 2026-10-22:
+  Claude answer rows are keyed `<question uuid>-hub-reply` and Gemini shows turn ids, so a
+  regenerated answer keeps its ids there — only the text tells; chatgpt.com draws image answers and
+  long-run work logs without ids. Null must never lead to the copy.
 - Before releasing a change to collection or the handoff engine, run it on real conversations the
   way users do (in-app navigation, the in-page panel), export JSON + handoff for each, and run
   `npm run check:real` on that folder. Mock E2E alone missed the hidden-conversation bug (v1.3.2).

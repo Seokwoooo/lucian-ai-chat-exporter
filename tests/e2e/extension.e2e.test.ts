@@ -180,24 +180,28 @@ async function runAndWait(tabId: number, selector: string, timeoutMs = 60_000): 
  * Grok #response-<id>.
  */
 async function markWithCopyIds(page: Page, site: 'chatgpt' | 'claude' | 'gemini' | 'grok'): Promise<void> {
-  const ids = await popup.evaluate(async (prefix) => {
+  const { ids, answer } = await popup.evaluate(async (prefix) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const req = indexedDB.open('lucianDB');
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
-    const recs = await new Promise<Array<{ key: string; savedAt: number; conversation: { messages: Array<{ id?: string; ids?: string[] }> } }>>((resolve, reject) => {
+    type Msg = { id?: string; ids?: string[]; role: string; contents: Array<{ type: string; content?: string }> };
+    const recs = await new Promise<Array<{ key: string; savedAt: number; conversation: { messages: Msg[] } }>>((resolve, reject) => {
       const req = db.transaction('conversations').objectStore('conversations').getAll();
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
     db.close();
     const rec = recs.filter((r) => r.key.startsWith(prefix)).sort((a, b) => b.savedAt - a.savedAt)[0];
-    return rec ? rec.conversation.messages.flatMap((m) => (m.ids?.length ? m.ids : m.id ? [m.id] : [])) : [];
+    const msgs = rec?.conversation.messages ?? [];
+    const last = msgs[msgs.length - 1];
+    const md = last?.role === 'assistant' ? [...last.contents].reverse().find((c) => c.type === 'markdown' && c.content?.trim())?.content ?? '' : '';
+    return { ids: msgs.flatMap((m) => (m.ids?.length ? m.ids : m.id ? [m.id] : [])), answer: md };
   }, `${site}:`);
   expect(ids.length, site).toBeGreaterThan(0);
   await page.evaluate(
-    (site, ids) => {
+    (site, ids, answer) => {
       // The Claude and Gemini mock pages end with a question; a real page showing the copy ends
       // with its last answer (a question-last page is never taken as current).
       const ending = (sel: string, isQuestion: (el: Element) => boolean, answer: string) => {
@@ -223,9 +227,19 @@ async function markWithCopyIds(page: Page, site: 'chatgpt' | 'claude' | 'gemini'
         els[0].before(box);
         for (const el of els) box.append(el);
       }
+      // ...and its last answer reads like the copy's (link targets and fences are not shown).
+      const shown = answer.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/^\s*(?:`{3,}|~{3,}).*$/gm, '').replace(/<[^>]+>/g, '');
+      const answerEl = {
+        chatgpt: () => [...document.querySelectorAll('[data-message-author-role="assistant"] .markdown')].pop(),
+        claude: () => [...document.querySelectorAll('[data-testid="assistant-message"]')].pop(),
+        gemini: () => [...document.querySelectorAll('model-response')].pop(),
+        grok: () => [...document.querySelectorAll('.items-start .message-bubble')].pop(),
+      }[site]();
+      if (answerEl) answerEl.textContent = shown;
     },
     site,
     ids,
+    answer,
   );
 }
 
@@ -487,19 +501,28 @@ describeIf('extension E2E (Chrome for Testing, mocked sites)', () => {
         const items = await popup.$$eval('#checks li', (lis) => lis.map((li) => li.textContent ?? ''));
         expect(items[0], site).toMatch(/요청을 잠시 막아 (방금|\d+분 전에) 받아 둔 사본|limiting requests, so this was built from the copy saved/);
 
-        // 2b) The page shows nothing the copy lacks (its messages carry the copy's server ids, as the
-        //     real sites' do): no waiting even for a long Retry-After, the copy at once, only a note.
+        // 2b) The page shows nothing the copy lacks (its messages carry the copy's server ids and its
+        //     last answer reads the same, as on the real sites): no waiting even for a long
+        //     Retry-After, the copy at once, only a note. The ChatGPT mock ends with a canvas, an
+        //     answer without text: it cannot be compared, so the extension waits as usual.
         await markWithCopyIds(page, site);
-        rateLimit.set(site, { times: Infinity, retryAfter: 30 });
+        const comparable = site !== 'chatgpt';
+        rateLimit.set(site, { times: Infinity, retryAfter: comparable ? 30 : 1 });
         const progressBefore = seenProgress.length;
         const quick = await runAndWait(tabId, '#handoffBtn');
         expect(quick.job.phase, `${site}: ${JSON.stringify(quick.job.error)}`).toBe('done');
-        expect(quick.ms, site).toBeLessThan(5000);
-        expect(seenProgress.slice(progressBefore).some((p) => p.label === 'wait'), site).toBe(false);
+        const waitedOut = seenProgress.slice(progressBefore).some((p) => p.label === 'wait');
         const c2b = quick.job.result?.verification.checks ?? [];
-        expect(c2b.find((c) => c.code === 'source.saved')?.status, `${site}: ${JSON.stringify(c2b)}`).toBe('info');
-        expect(quick.job.result?.verification.level, site).toBe('ok');
         expect(quick.job.result?.handoffStats?.messages, site).toBe(messages);
+        if (comparable) {
+          expect(quick.ms, site).toBeLessThan(5000);
+          expect(waitedOut, site).toBe(false);
+          expect(c2b.find((c) => c.code === 'source.saved')?.status, `${site}: ${JSON.stringify(c2b)}`).toBe('info');
+          expect(quick.job.result?.verification.level, site).toBe('ok');
+        } else {
+          expect(waitedOut, site).toBe(true);
+          expect(c2b.find((c) => c.code === 'source.saved')?.status, `${site}: ${JSON.stringify(c2b)}`).toBe('warn');
+        }
 
         // 3) No saved copy either: an error that names the wait; the page is still not read.
         rateLimit.set(site, { times: Infinity, retryAfter: 1 });

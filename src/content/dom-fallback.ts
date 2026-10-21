@@ -5,6 +5,7 @@
 // unmount turns that leave the viewport) are then read while scrolling back down.
 
 import { SITES } from '../shared/sites';
+import { plainKey, type PageTail } from '../shared/saved-copy';
 import type { Conversation, ExportMessage, Role, SiteId } from '../shared/types';
 import { sleep } from '../shared/util';
 import { ExtractError, cleanTitle, renderedElements, titleFromFirstUserMessage, type AdapterContext } from './adapters/types';
@@ -67,9 +68,12 @@ export const DOM_SPECS: Record<SiteId, DomSpec> = {
       const k = el.closest('[data-turn-key]')?.getAttribute('data-turn-key') ?? el.closest('[data-testid="transcript-row"]')?.getAttribute('data-index');
       return k ? `${el.matches('[data-testid="user-message"]') ? 'u' : 'a'}:${k}` : null;
     },
-    // data-turn-key is the message uuid; the row of the newest message carries data-last-message.
-    turnIds: (el) => idsOf(el.closest('[data-turn-key]')?.getAttribute('data-turn-key')),
+    // data-turn-key is the message uuid of a question; an answer's row carries its question's
+    // uuid + "-hub-reply" (2026-10-22: the answer's own uuid is not on the page, so its text is
+    // compared instead). The row of the newest message carries data-last-message.
+    turnIds: (el) => idsOf(el.closest('[data-turn-key]')?.getAttribute('data-turn-key')).map((id) => id.replace(/-hub-reply$/, '')),
     lastRow: '[data-last-message="true"]',
+    busy: '[data-is-streaming="true"]',
   },
   gemini: {
     items: 'user-query, model-response',
@@ -139,13 +143,14 @@ const END_SLACK_PX = 2000;
 const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) && !a.contains(b);
 
 /**
- * Server ids of the newest messages on the page (the last rendered turns), or null whenever that
- * cannot be told for sure: the list is scrolled up, a turn is still being written, the newest
- * message is a question (its answer is missing or drawn without ids: chatgpt.com images and work
- * logs, 2026-10-22, so a regenerated answer would go unnoticed), or one of the newest turns carries
- * no ids. Null means "wait for the site", never "use the copy". Read only while a job runs.
+ * The newest messages on the page: server ids of the last rendered turns and the last answer's
+ * text (`plainKey`). Null whenever that cannot be told for sure: the list is scrolled up, a turn is
+ * still being written, the newest message is a question (its answer is missing or drawn without
+ * ids: chatgpt.com images and work logs, 2026-10-22), one of the newest turns carries no ids, or the
+ * answer shows no text. Null means "wait for the site", never "use the copy". Read only while a
+ * job runs.
  */
-export function latestTurnIds(site: SiteId): string[] | null {
+export function latestTurns(site: SiteId): PageTail | null {
   const spec = DOM_SPECS[site];
   const els = outermost(renderedElements(spec.items));
   const last = els[els.length - 1];
@@ -162,7 +167,9 @@ export function latestTurnIds(site: SiteId): string[] | null {
     if (!own.length) return null;
     for (const id of own) ids.add(id);
   }
-  return [...ids];
+  const shown = spec.content(last, 'assistant') as HTMLElement;
+  const answer = plainKey(shown.innerText ?? shown.textContent ?? '');
+  return answer ? { ids: [...ids], answer } : null;
 }
 
 /** Scrolls up until no more history renders (bounded to keep the fallback responsive). */

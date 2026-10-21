@@ -15,7 +15,7 @@ import { grokAdapter } from './adapters/grok';
 import { ExtractError, type AdapterContext, type SiteAdapter } from './adapters/types';
 import { Bridge } from './bridge';
 import { collectConversation } from './collect';
-import { latestTurnIds } from './dom-fallback';
+import { latestTurns } from './dom-fallback';
 import { initPageUi } from './page-ui';
 
 declare global {
@@ -81,9 +81,9 @@ if (!window.__lucianContentLoaded) {
           return;
         }
         busy = true; // tech doc §21.1 in-flight flag
-        // The saved copy's newest ids (if any): when the page shows nothing newer, a 429 is not waited out.
+        // The saved copy's newest ids and last answer (if any): when the page shows nothing newer, a 429 is not waited out.
         const copy = msg.copy;
-        ctx.savedCopyIsCurrent = () => copyIsCurrent(latestTurnIds(site), copy);
+        ctx.savedCopyIsCurrent = () => copyIsCurrent(latestTurns(site), copy);
         try {
           ctx.url = location.href;
           const conversationId = extractConversationId(site, location.href);
