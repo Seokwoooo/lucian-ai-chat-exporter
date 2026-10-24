@@ -1,4 +1,6 @@
-# Chrome 웹 스토어 등록 정보 (초안)
+# Chrome 웹 스토어 등록 정보
+
+게시 중: https://chromewebstore.google.com/detail/lucian-ai-chat-exporter/mkgfcdegdibhhkkcilhmdkfkfboenmeh (v1.3.10, 2026-10-22)
 
 업로드 파일: `release/lucian-ai-chat-exporter-v1.3.10.zip` (`npm run package`로 생성, SHA-256은 같은 폴더의 `.sha256` 파일)
 
@@ -10,9 +12,9 @@
 | 요약 (132자 이내) | ChatGPT·Claude·Gemini·Grok 대화를 원클릭으로 다른 AI에 인수인계하거나 PDF·Markdown·Word·한글로 손실 없이 내보냅니다. |
 | 카테고리 | 생산성 (Productivity) |
 | 언어 | 한국어(기본), 영어 |
-| 공식 URL | https://github.com/Seokwoooo/lucian-ai-chat-exporter |
-| 지원 URL | https://github.com/Seokwoooo/lucian-ai-chat-exporter/issues |
-| 개인정보처리방침 URL | 게시한 `docs/privacy-policy.md`의 주소 (GitHub Pages 등) |
+| 공식 URL | https://lucianlabs.dev (소개 페이지 https://lucianlabs.dev/ai-chat-exporter/, 소스 https://github.com/Seokwoooo/lucian-ai-chat-exporter) |
+| 지원 URL | https://lucianlabs.dev/ai-chat-exporter/support/ |
+| 개인정보처리방침 URL | https://lucianlabs.dev/ai-chat-exporter/privacy/ (저장소 사본: `docs/privacy-policy.md`) |
 
 ## 상세 설명 (한국어)
 

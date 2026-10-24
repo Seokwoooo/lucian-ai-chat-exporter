@@ -73,8 +73,6 @@ popup            src/popup/*                two cards: handoff button, export fo
 
 ## Rules
 
-- The technical reference for collection logic is `docs/AI_Exporter_상세_작동원리_기술문서.md`
-  (local only, git-ignored). Product behaviour and UX follow the product spec, not that document.
 - No remote code, no `eval`, no analytics, no external servers. PDF must stay local.
 - Site adapters must stay independent; keep selectors/indices in the adapter file so a site change
   is a one-file fix. Parsers are pure functions with fixture tests in `tests/adapters`.
@@ -108,7 +106,7 @@ popup            src/popup/*                two cards: handoff button, export fo
   earlier conversation on all four sites and also forces the API to answer in an unknown shape.
 - A refused or limited request is not a reason to read the page (user report 2026-10-22: chatgpt.com
   answered a long chat's repeated full requests with 429 "Retry-After: 35"; the page fallback scrolled
-  the chat for ~40 s and kept 16 of 42 messages, while AI Exporter used its saved copy). Conversation
+  the chat for ~40 s and kept 16 of 42 messages, while another exporter extension used its saved copy). Conversation
   requests pass `rateLimitWaitMs: RATE_LIMIT_WAIT_MS` and wait out Retry-After (≤ 3 answers, ≤ 90 s,
   progress label `wait` = countdown); optional requests keep the short backoff. RATE_LIMIT / AUTH /
   NETWORK (`FETCH_FAILURES`, src/shared/saved-copy.ts) never reach the DOM fallback: the service

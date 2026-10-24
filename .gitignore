@@ -13,8 +13,8 @@ test-output/
 .e2e-downloads/
 bench-results/*.local.json
 
-# local reference material (third-party analysis, not for publication)
-docs/AI_Exporter_상세_작동원리_기술문서.md
+# local notes for Claude Code
+CLAUDE.local.md
 
 # environment / secrets
 .env

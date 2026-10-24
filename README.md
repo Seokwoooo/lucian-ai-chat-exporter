@@ -1,5 +1,6 @@
 # Lucian AI Chat Exporter
 
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/mkgfcdegdibhhkkcilhmdkfkfboenmeh?label=Chrome%20Web%20Store&color=1a1a1a)](https://chromewebstore.google.com/detail/lucian-ai-chat-exporter/mkgfcdegdibhhkkcilhmdkfkfboenmeh)
 [![CI](https://github.com/Seokwoooo/lucian-ai-chat-exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/Seokwoooo/lucian-ai-chat-exporter/actions/workflows/ci.yml)
 ![Manifest V3](https://img.shields.io/badge/Chrome-MV3-1a1a1a)
 ![License: MIT](https://img.shields.io/badge/license-MIT-1a1a1a)
@@ -8,7 +9,9 @@ ChatGPT·Claude·Gemini·Grok 대화를 **한 번의 클릭으로 다른 AI에�
 
 모든 처리는 브라우저 안에서 끝납니다. 대화 내용을 외부 서버나 AI로 보내지 않고, 회원가입도 설정도 없습니다.
 
-[English](#english) · [설치](#설치) · [기능](#두-가지-기능) · [지원 범위](#지원-범위) · [개인정보](#개인정보) · [한계](#알려진-한계) · [개발](#개발)
+**[Chrome 웹 스토어에서 설치](https://chromewebstore.google.com/detail/lucian-ai-chat-exporter/mkgfcdegdibhhkkcilhmdkfkfboenmeh)** · [소개 페이지](https://lucianlabs.dev/ai-chat-exporter/) · [English](#english)
+
+[설치](#설치) · [기능](#두-가지-기능) · [지원 범위](#지원-범위) · [개인정보](#개인정보) · [한계](#알려진-한계) · [개발](#개발)
 
 | 답변 아래 Lucian 버튼 | 툴바 팝업 | 다른 형식 펼침 (다크 모드) |
 |---|---|---|
@@ -67,9 +70,15 @@ v1.3.7부터 Markdown이 맨 앞에 오고, Word는 “다른 형식 더 보기�
 
 ## 설치
 
+### Chrome 웹 스토어 (추천)
+
+[Chrome 웹 스토어의 Lucian AI Chat Exporter](https://chromewebstore.google.com/detail/lucian-ai-chat-exporter/mkgfcdegdibhhkkcilhmdkfkfboenmeh)에서 **Chrome에 추가**를 누르면 됩니다. 업데이트도 자동으로 받습니다. 설치한 뒤 열려 있던 ChatGPT·Claude·Gemini·Grok 대화 탭은 새로고침해 주세요.
+
 ### 릴리스 ZIP으로 설치 (개발자 모드)
 
-1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases)에서 `lucian-ai-chat-exporter-v1.3.10.zip`을 받아 압축을 풉니다.
+스토어를 쓸 수 없거나 특정 버전을 직접 올리고 싶을 때 씁니다.
+
+1. [Releases](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases/latest)에서 `lucian-ai-chat-exporter-v1.3.10.zip`을 받아 압축을 풉니다.
 2. Chrome 주소창에 `chrome://extensions`를 입력합니다.
 3. 오른쪽 위 **개발자 모드**를 켭니다.
 4. **압축해제된 확장 프로그램을 로드합니다**를 누르고, 압축을 푼 폴더(`manifest.json`이 있는 폴더)를 고릅니다.
@@ -118,7 +127,7 @@ Chrome 116 이상이 필요합니다.
 - 로그인 정보, 쿠키, 인증 토큰을 **디스크에 저장하지 않습니다.** 서비스 페이지가 쓰는 인증 헤더는 그 탭의 메모리에서만 요청에 사용합니다.
 - 수집한 대화, 이미지, 인수인계 분석 캐시는 이 컴퓨터의 IndexedDB(`lucianDB`)에만 저장됩니다. 7일이 지나면 삭제되고(브라우저 시작 시와 작업 시작 시 정리), 이미지 캐시는 최근 500개까지만 유지합니다.
 - 인증을 우회하거나 보안 기능을 무력화하지 않습니다. 사용자가 이미 볼 수 있는 대화만 읽습니다.
-- 자세한 내용: [개인정보처리방침 초안](docs/privacy-policy.md) · [권한 설명](docs/permissions.md)
+- 자세한 내용: [개인정보처리방침](https://lucianlabs.dev/ai-chat-exporter/privacy/) ([저장소 사본](docs/privacy-policy.md)) · [권한 설명](docs/permissions.md)
 
 ---
 
@@ -126,7 +135,7 @@ Chrome 116 이상이 필요합니다.
 
 솔직하게 적습니다. 자세한 내용은 [테스트 보고서](docs/test-report.md)에 있습니다.
 
-- **실제 계정에서 확장 프로그램 전체 흐름은 검증하지 못했습니다.** 실제 사이트 4곳에서는 로그인된 브라우저로 내부 API의 응답 구조와 DOM 구조만 읽기 전용으로 확인했습니다. 설치 → 클릭 → 다운로드까지의 흐름은 모의 사이트 E2E로만 검증했습니다.
+- **실제 계정에서 확장 전체 흐름(클릭 → 수집 → 다운로드)은 ChatGPT·Claude에서만 확인했습니다.** v1.3.3에서 실제 대화 39개를 답변 아래 패널로 인수인계하고 JSON으로 내보내, 서버 기록과 39/39 일치했습니다. Gemini·Grok은 실제 사이트에서 내부 API 응답과 화면 구조만 읽기 전용으로 확인했고, 전체 흐름은 네 사이트 모두 모의 사이트 E2E로 검증합니다.
 - 각 서비스의 내부 API와 화면 구조는 예고 없이 바뀔 수 있습니다. API 응답 형식을 읽지 못하면 화면(DOM)에서 읽는 대체 경로를 쓰고, 그 사실을 검증 결과에 경고로 남깁니다. 요청이 막히거나(429) 로그인·네트워크 문제로 실패하면 화면을 읽지 않고, 저장된 사본을 쓰거나 오류를 알립니다(v1.3.10).
 - PDF는 인쇄 창에서 사용자가 “PDF로 저장”을 직접 골라야 합니다. 브라우저 확장이 PDF 파일을 바로 저장하는 안정적인 로컬 방법이 없기 때문입니다.
 - Word·HWPX·TXT의 수식은 LaTeX 원문으로 들어갑니다(PDF·HTML은 렌더링).
@@ -177,11 +186,11 @@ ChatGPT·OpenAI, Claude·Anthropic, Gemini·Google, Grok·xAI의 이름과 로�
 
 Both features open from a small **Lucian button under every finished answer** (next to copy/retry, with a soft violet–cyan glow) and from the toolbar icon. Long jobs show “Processing… (n% done)”. A small illustration above the handoff button (this service's logo → curved arrow → the other services) shows what a handoff is. Documents list the sources an answer actually cited; uncited search results stay in the JSON/ZIP backup.
 
-**Install:** download the release ZIP → unzip → `chrome://extensions` → enable *Developer mode* → *Load unpacked* → select the folder → reload the chat page.
+**Install:** [add it from the Chrome Web Store](https://chromewebstore.google.com/detail/lucian-ai-chat-exporter/mkgfcdegdibhhkkcilhmdkfkfboenmeh) and reload any open chat tabs. Without the store: download the ZIP from [the latest release](https://github.com/Seokwoooo/lucian-ai-chat-exporter/releases/latest) → unzip → `chrome://extensions` → enable *Developer mode* → *Load unpacked* → select the folder → reload the chat page. Product page: [lucianlabs.dev/ai-chat-exporter](https://lucianlabs.dev/ai-chat-exporter/).
 
-**Privacy:** everything runs in your browser. No servers, analytics or AI APIs. Auth tokens and cookies are never written to disk. Collected conversations, images and the handoff analysis cache stay in this browser's IndexedDB and are deleted after 7 days; the image cache keeps at most 500 entries. See [privacy policy draft](docs/privacy-policy.md) and [permissions](docs/permissions.md).
+**Privacy:** everything runs in your browser. No servers, analytics or AI APIs. Auth tokens and cookies are never written to disk. Collected conversations, images and the handoff analysis cache stay in this browser's IndexedDB and are deleted after 7 days; the image cache keeps at most 500 entries. See the [privacy policy](https://lucianlabs.dev/ai-chat-exporter/privacy/) ([copy in this repo](docs/privacy-policy.md)) and [permissions](docs/permissions.md).
 
-**Limitations:** the full install → click → download flow was verified end to end against mocked sites in Chrome for Testing. On the real sites, only the API responses and page structure were checked, read-only, in a logged-in browser. HWPX was not opened in Hancom Office and DOCX was not opened in Microsoft Word. Math in DOCX/HWPX/TXT is LaTeX source. PDF requires choosing “Save as PDF” in the print dialog. Gemini thinking and citations are not parsed. See the [test report](docs/test-report.md).
+**Limitations:** the full click → collect → download flow was verified on real accounts for ChatGPT and Claude only (39 real conversations handed off from the in-page panel and exported as JSON, 39/39 matching the server records, v1.3.3). For Gemini and Grok, only the API responses and page structure were checked on the real sites, read-only; the full flow is verified for all four sites against mocked sites in Chrome for Testing. HWPX was not opened in Hancom Office and DOCX was not opened in Microsoft Word. Math in DOCX/HWPX/TXT is LaTeX source. PDF requires choosing “Save as PDF” in the print dialog. Gemini thinking and citations are not parsed. See the [test report](docs/test-report.md).
 
 **Development:** `npm ci && npm run check`, `npm run test:e2e` (after `npm run e2e:install-chrome`), `npm run package`.
 

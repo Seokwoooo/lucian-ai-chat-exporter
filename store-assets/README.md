@@ -11,6 +11,8 @@
 | 스크린샷 | 1280×800, 1~5장, JPEG 또는 24비트 PNG(알파 없음) | 1장 이상 | **가능** | `ko/screenshot-*.png`, `en/screenshot-*.png` |
 | 작은 프로모션 타일 | 440×280 PNG/JPEG | 필수 | 불가(1개만) | `ko/` 또는 `en/promo-small-440x280.png` |
 | 마키 프로모션 타일 | 1400×560 PNG/JPEG | 선택 | 불가(1개만) | `ko/` 또는 `en/promo-marquee-1400x560.png` |
+
+`social-preview-1280x640.png`(ko/en)는 스토어용이 아니라 GitHub 저장소의 **Settings → Social preview**에 올리는 링크 카드 이미지입니다(X 등에 저장소 링크를 붙일 때 보임). 마키 타일 장면을 2:1로 늘려 만들었습니다.
 | 홍보 동영상 | YouTube 링크 | 선택 | 가능 | (없음) |
 
 - **스크린샷**: 언어 선택에서 "한국어"를 고른 뒤 `ko/` 5장, "English"를 고른 뒤 `en/` 5장을 순서대로 올립니다.
