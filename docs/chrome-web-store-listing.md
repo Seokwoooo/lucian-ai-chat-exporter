@@ -15,6 +15,7 @@
 | 공식 URL | https://lucianlabs.dev (소개 페이지 https://lucianlabs.dev/ai-chat-exporter/, 소스 https://github.com/Seokwoooo/lucian-ai-chat-exporter) |
 | 지원 URL | https://lucianlabs.dev/ai-chat-exporter/support/ |
 | 개인정보처리방침 URL | https://lucianlabs.dev/ai-chat-exporter/privacy/ (저장소 사본: `docs/privacy-policy.md`) |
+| 개발자 연락처 이메일 | lucian.sw.kim@gmail.com (개발자 대시보드 → 계정. 스토어 페이지에 공개되므로 개인 메일을 쓰지 않음) |
 
 ## 상세 설명 (한국어)
 
